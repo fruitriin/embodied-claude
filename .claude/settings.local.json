@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__wifi-cam__camera_tilt_up"
+    ]
+  }
+}

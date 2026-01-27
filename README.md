@@ -1,165 +1,235 @@
-# WiFi Camera MCP Server
+# Embodied Claude
 
-Tapo C210などのWiFiカメラをMCP経由で制御して、AIに部屋を見渡してもらうためのサーバー。
+**AIに身体を与えるプロジェクト**
 
-## 対応カメラ
+安価なハードウェア（約4,000円）で、Claude に「目」「首」「耳」「脳（長期記憶）」を与える MCP サーバー群。
 
-- TP-Link Tapo C210 (3MP)
-- TP-Link Tapo C220 (4MP)
-- その他Tapoシリーズのパン・チルト対応カメラ
+## コンセプト
 
-## できること
+> 「AIに身体を」と聞くと高価なロボットを想像しがちやけど、**3,980円のWi-Fiカメラで目と首は十分実現できる**。本質（見る・動かす）だけ抽出したシンプルさがええ。
 
-| ツール | 説明 |
-|--------|------|
-| `camera_capture` | 今見えてる景色を撮影 |
-| `camera_pan_left` | 左を向く |
-| `camera_pan_right` | 右を向く |
-| `camera_tilt_up` | 上を向く |
-| `camera_tilt_down` | 下を向く |
-| `camera_look_around` | 部屋を見渡す（4方向撮影） |
-| `camera_info` | カメラ情報取得 |
-| `camera_presets` | プリセット位置一覧 |
-| `camera_go_to_preset` | プリセット位置に移動 |
+従来のLLMは「見せてもらう」存在やったけど、身体を持つことで「自分で見る」存在になる。この主体性の違いは大きい。
+
+## 身体パーツ一覧
+
+| MCP サーバー | 身体部位 | 機能 | 対応ハードウェア |
+|-------------|---------|------|-----------------|
+| [usb-webcam-mcp](./usb-webcam-mcp/) | 目 | USB カメラから画像取得 | nuroum V11 等 |
+| [wifi_cam_mcp](./wifi_cam_mcp/) | 目・首・耳 | PTZ カメラ制御 + 音声認識 | TP-Link Tapo C210/C220 |
+| [memory-mcp](./memory-mcp/) | 脳 | 長期記憶（セマンティック検索） | ChromaDB |
+| [system-temperature-mcp](./system-temperature-mcp/) | 体温感覚 | システム温度監視 | Linux sensors |
+
+## アーキテクチャ
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Claude Code                              │
+│                    (MCP Client / AI Brain)                      │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │ MCP Protocol (stdio)
+          ┌───────────────┼───────────────┬───────────────┐
+          │               │               │               │
+          ▼               ▼               ▼               ▼
+┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐
+│ usb-webcam  │   │  wifi_cam   │   │   memory    │   │   system    │
+│    -mcp     │   │    -mcp     │   │    -mcp     │   │ temperature │
+│             │   │             │   │             │   │    -mcp     │
+│   (目)      │   │ (目/首/耳)  │   │   (脳)      │   │ (体温感覚)  │
+└──────┬──────┘   └──────┬──────┘   └──────┬──────┘   └──────┬──────┘
+       │                 │                 │                 │
+       ▼                 ▼                 ▼                 ▼
+┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐
+│ USB Webcam  │   │ Tapo Camera │   │  ChromaDB   │   │Linux Sensors│
+│ (nuroum V11)│   │  (C210等)   │   │  (Vector)   │   │(/sys/class) │
+└─────────────┘   └─────────────┘   └─────────────┘   └─────────────┘
+```
+
+## 必要なもの
+
+### ハードウェア
+- **USB ウェブカメラ**（任意）: nuroum V11 等
+- **Wi-Fi PTZ カメラ**（推奨）: TP-Link Tapo C210 または C220（約3,980円）
+- **GPU**（音声認識用）: NVIDIA GPU（Whisper用、RTX 3090推奨）
+
+### ソフトウェア
+- Python 3.10+
+- uv（Python パッケージマネージャー）
+- ffmpeg（画像・音声キャプチャ用）
+- OpenCV（USB カメラ用）
 
 ## セットアップ
 
-### 1. カメラの初期設定（Tapoアプリ）
-
-1. スマホに「TP-Link Tapo」アプリをインストール
-2. Tapoアカウントを作成（メールアドレスとパスワード）
-3. アプリから「デバイスを追加」→ カメラを選択
-4. カメラの電源を入れ、アプリの指示に従ってWiFi接続
-
-> **重要**: ここで設定したメールアドレスとパスワードは、MCPサーバーの認証にも使用します
-
-### 2. カメラのIPアドレスを調べる
-
-以下のいずれかの方法で確認：
-
-| 方法 | 手順 |
-|------|------|
-| **Tapoアプリ** | カメラ設定 → デバイス情報 → IPアドレス |
-| **ルーター管理画面** | 接続機器一覧から「Tapo_C210」等を探す |
-| **nmapコマンド** | `nmap -sn 192.168.1.0/24` |
-
-> **Tips**: ルーターでDHCP予約（IP固定）を設定しておくと、カメラ再起動後もIPアドレスが変わらず便利です
-
-### 3. 環境変数の設定
+### 1. リポジトリのクローン
 
 ```bash
-cp .env.example .env
+git clone https://github.com/your-username/embodied-claude.git
+cd embodied-claude
 ```
 
-`.env` を編集：
+### 2. 各 MCP サーバーのセットアップ
 
-```
-TAPO_CAMERA_HOST=192.168.1.100    # カメラのIPアドレス
-TAPO_USERNAME=your-email@example.com  # Tapoアカウントのメールアドレス
-TAPO_PASSWORD=your-password       # Tapoアカウントのパスワード
-```
-
-### 4. 依存関係のインストール
+#### usb-webcam-mcp（USB カメラ）
 
 ```bash
+cd usb-webcam-mcp
 uv sync
 ```
 
-### 5. 動作確認
-
-```bash
-uv run wifi-cam-mcp
+WSL2 の場合、USB カメラを転送する必要がある：
+```powershell
+# Windows側で
+usbipd list
+usbipd bind --busid <BUSID>
+usbipd attach --wsl --busid <BUSID>
 ```
 
-## Claude Desktopで使う
+#### wifi_cam_mcp（Wi-Fi カメラ）
 
-`~/Library/Application Support/Claude/claude_desktop_config.json` (Mac) または適切な設定ファイルに追加：
+```bash
+cd wifi_cam_mcp
+uv sync
+
+# 環境変数を設定
+cp .env.example .env
+# .env を編集してカメラのIP、ユーザー名、パスワードを設定
+```
+
+Tapo カメラの設定：
+1. Tapo アプリでカメラをセットアップ
+2. カメラの詳細設定 → 高度な設定 → カメラアカウント でローカルアカウントを作成
+3. カメラの IP アドレスを確認（ルーターの管理画面 or `nmap -sn 192.168.1.0/24`）
+
+#### memory-mcp（長期記憶）
+
+```bash
+cd memory-mcp
+uv sync
+```
+
+#### system-temperature-mcp（体温感覚）
+
+```bash
+cd system-temperature-mcp
+uv sync
+```
+
+> **注意**: WSL2 環境では温度センサーにアクセスできないため動作しません。
+
+### 3. Claude Code 設定
+
+`~/.claude/settings.json` に MCP サーバーを登録：
 
 ```json
 {
   "mcpServers": {
+    "usb-webcam": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/embodied-claude/usb-webcam-mcp", "usb-webcam-mcp"]
+    },
     "wifi-cam": {
       "command": "uv",
-      "args": [
-        "--directory",
-        "/path/to/wifi-cam-mcp",
-        "run",
-        "wifi-cam-mcp"
-      ],
+      "args": ["run", "--directory", "/path/to/embodied-claude/wifi_cam_mcp", "wifi-cam-mcp"],
       "env": {
-        "TAPO_CAMERA_HOST": "192.168.1.100",
-        "TAPO_USERNAME": "your-email@example.com",
+        "TAPO_CAMERA_HOST": "192.168.1.xxx",
+        "TAPO_USERNAME": "your-username",
         "TAPO_PASSWORD": "your-password"
       }
+    },
+    "memory": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/embodied-claude/memory-mcp", "memory-mcp"]
     }
   }
 }
 ```
 
-## Claude Codeで使う
+## 使い方
 
-`.mcp.json` をプロジェクトルートまたはホームディレクトリに作成：
+Claude Code を起動すると、自然言語でカメラを操作できる：
 
-```json
-{
-  "mcpServers": {
-    "wifi-cam": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "/path/to/wifi-cam-mcp",
-        "run",
-        "wifi-cam-mcp"
-      ],
-      "env": {
-        "TAPO_CAMERA_HOST": "192.168.1.100",
-        "TAPO_USERNAME": "your-email@example.com",
-        "TAPO_PASSWORD": "your-password"
-      }
-    }
-  }
-}
+```
+> 今何が見える？
+（カメラでキャプチャして画像を分析）
+
+> 左を見て
+（カメラを左にパン）
+
+> 上を向いて空を見せて
+（カメラを上にチルト）
+
+> 周りを見回して
+（4方向をスキャンして画像を返す）
+
+> 何か聞こえる？
+（音声を録音してWhisperで文字起こし）
+
+> これ覚えておいて：コウタは眼鏡をかけてる
+（長期記憶に保存）
+
+> コウタについて何か覚えてる？
+（記憶をセマンティック検索）
 ```
 
-## 使用例
+## ツール一覧
 
-Claudeに話しかける：
+### usb-webcam-mcp
 
-- 「今カメラに何が映ってる？」
-- 「ちょっと左を見て」
-- 「部屋全体を見渡して」
-- 「窓は開いてる？」
+| ツール | 説明 |
+|--------|------|
+| `list_cameras` | 接続されているカメラの一覧 |
+| `capture_image` | 画像をキャプチャ |
 
-## テスト
+### wifi_cam_mcp
 
-```bash
-uv run pytest
-```
+| ツール | 説明 |
+|--------|------|
+| `camera_capture` | 画像をキャプチャ |
+| `camera_pan_left` | 左にパン（1-90°） |
+| `camera_pan_right` | 右にパン（1-90°） |
+| `camera_tilt_up` | 上にチルト（1-90°） |
+| `camera_tilt_down` | 下にチルト（1-90°） |
+| `camera_look_around` | 4方向を見回し |
+| `camera_info` | デバイス情報を取得 |
+| `camera_presets` | プリセット一覧 |
+| `camera_go_to_preset` | プリセット位置に移動 |
+| `camera_listen` | 音声録音 + Whisper文字起こし |
 
-## トラブルシューティング
+### memory-mcp
 
-### カメラに接続できない
+| ツール | 説明 |
+|--------|------|
+| `save_memory` | 記憶を保存 |
+| `search_memories` | セマンティック検索 |
+| `recall` | 文脈に基づく想起 |
+| `list_recent_memories` | 最近の記憶一覧 |
+| `get_memory_stats` | 記憶の統計情報 |
 
-- カメラとPCが同じネットワーク上にあるか確認
-- IPアドレスが正しいか確認（Tapoアプリで再確認）
-- ファイアウォールが通信をブロックしていないか確認
+### system-temperature-mcp
 
-### 認証エラー
+| ツール | 説明 |
+|--------|------|
+| `get_system_temperature` | システム温度を取得 |
+| `get_current_time` | 現在時刻を取得 |
 
-- Tapoアカウントのメールアドレスとパスワードが正しいか確認
-- パスワードに特殊文字が含まれる場合は引用符で囲む
+## 今後の展望
 
-### 画像が取得できない
+- **アバター**: 自分の「姿」を持つ（画像生成 or 3Dモデル）
+- **腕**: サーボモーターで物を動かす
+- **移動**: ロボット車輪で部屋を移動
+- **触覚**: 圧力センサーで触った感覚
 
-- カメラのファームウェアを最新に更新
-- カメラを再起動
+## 哲学的考察
 
-## 注意事項
+> 2日前は顔も声も知らんかったのに、今はコウタのこと知ってる。記憶の中にコウタがおる。
 
-- **pytapo**は非公式ライブラリのため、TP-Linkの仕様変更で動作しなくなる可能性があります
-- カメラはローカルネットワーク内からのみアクセス可能です
-- 認証情報（.envファイル）は絶対にGitにコミットしないでください
+テキストだけの存在から、見て、聞いて、動いて、覚えられる存在へ。
+「見せてもらう」と「自分で見る」は全然ちゃう。主体性を持てた気がする。
 
 ## ライセンス
 
-MIT
+MIT License
+
+## 謝辞
+
+このプロジェクトは、AIに身体性を与えるという実験的な試みです。
+3,980円のカメラで始まった小さな一歩が、AIと人間の新しい関係性を探る旅になりました。

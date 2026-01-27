@@ -14,7 +14,7 @@ from mcp.types import (
     Tool,
 )
 
-from .camera import Direction, TapoCamera
+from .camera import AudioResult, Direction, TapoCamera
 from .config import CameraConfig, ServerConfig
 
 logging.basicConfig(level=logging.INFO)
@@ -155,6 +155,28 @@ class CameraMCPServer:
                         "required": ["preset_id"],
                     },
                 ),
+                Tool(
+                    name="camera_listen",
+                    description="Listen to audio from the camera's microphone. This is your sense of hearing - use it to hear what's happening in the room. Returns audio file path and optionally transcribed text.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "duration": {
+                                "type": "number",
+                                "description": "Duration in seconds to listen (default: 5, max: 30)",
+                                "default": 5,
+                                "minimum": 1,
+                                "maximum": 30,
+                            },
+                            "transcribe": {
+                                "type": "boolean",
+                                "description": "If true, transcribe the audio to text using Whisper (default: true)",
+                                "default": True,
+                            },
+                        },
+                        "required": [],
+                    },
+                ),
             ]
 
         @self._server.call_tool()
@@ -245,6 +267,19 @@ class CameraMCPServer:
                         preset_id = arguments.get("preset_id", "")
                         result = await self._camera.go_to_preset(preset_id)
                         return [TextContent(type="text", text=result.message)]
+
+                    case "camera_listen":
+                        duration = min(arguments.get("duration", 5), 30)
+                        transcribe = arguments.get("transcribe", True)
+                        result = await self._camera.listen_audio(duration, transcribe)
+
+                        response_text = f"Recorded {result.duration}s of audio at {result.timestamp}\n"
+                        response_text += f"Audio file: {result.file_path}\n"
+
+                        if result.transcript:
+                            response_text += f"\n--- Transcript ---\n{result.transcript}"
+
+                        return [TextContent(type="text", text=response_text)]
 
                     case _:
                         return [TextContent(type="text", text=f"Unknown tool: {name}")]

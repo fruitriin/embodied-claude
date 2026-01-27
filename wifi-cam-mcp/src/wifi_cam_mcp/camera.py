@@ -3,7 +3,8 @@
 import asyncio
 import base64
 import io
-import os
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -33,6 +34,17 @@ class CaptureResult:
     timestamp: str
     width: int
     height: int
+
+
+@dataclass(frozen=True)
+class AudioResult:
+    """Result of audio capture."""
+
+    audio_base64: str
+    file_path: str | None
+    timestamp: str
+    duration: float
+    transcript: str | None = None
 
 
 @dataclass(frozen=True)
@@ -79,7 +91,7 @@ class TapoCamera:
 
     async def capture_image(self, save_to_file: bool = True) -> CaptureResult:
         """
-        Capture a snapshot from the camera.
+        Capture a snapshot from the camera via RTSP stream.
 
         Args:
             save_to_file: If True, save image to disk as well
@@ -87,32 +99,61 @@ class TapoCamera:
         Returns:
             CaptureResult with base64 encoded image and metadata
         """
-        tapo = self._ensure_connected()
+        self._ensure_connected()
 
-        image_data = await asyncio.to_thread(tapo.getPreviewImage)
-
-        image = Image.open(io.BytesIO(image_data))
-        width, height = image.size
-
-        buffer = io.BytesIO()
-        image.save(buffer, format="JPEG", quality=85)
-        image_base64 = base64.standard_b64encode(buffer.getvalue()).decode("utf-8")
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_path = None
-
-        if save_to_file:
-            file_path = str(self._capture_dir / f"capture_{timestamp}.jpg")
-            with open(file_path, "wb") as f:
-                f.write(image_data)
-
-        return CaptureResult(
-            image_base64=image_base64,
-            file_path=file_path,
-            timestamp=timestamp,
-            width=width,
-            height=height,
+        rtsp_url = (
+            f"rtsp://{self._config.username}:{self._config.password}"
+            f"@{self._config.host}:554/stream1"
         )
+
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            cmd = [
+                "ffmpeg",
+                "-rtsp_transport", "tcp",
+                "-i", rtsp_url,
+                "-frames:v", "1",
+                "-f", "image2",
+                "-y",
+                tmp_path,
+            ]
+
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(process.wait(), timeout=10.0)
+
+            with open(tmp_path, "rb") as f:
+                image_data = f.read()
+
+            image = Image.open(io.BytesIO(image_data))
+            width, height = image.size
+
+            buffer = io.BytesIO()
+            image.save(buffer, format="JPEG", quality=85)
+            image_base64 = base64.standard_b64encode(buffer.getvalue()).decode("utf-8")
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            file_path = None
+
+            if save_to_file:
+                file_path = str(self._capture_dir / f"capture_{timestamp}.jpg")
+                with open(file_path, "wb") as f:
+                    f.write(image_data)
+
+            return CaptureResult(
+                image_base64=image_base64,
+                file_path=file_path,
+                timestamp=timestamp,
+                width=width,
+                height=height,
+            )
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
 
     async def move(self, direction: Direction, degrees: int = 30) -> MoveResult:
         """
@@ -131,13 +172,13 @@ class TapoCamera:
         try:
             match direction:
                 case Direction.LEFT:
-                    await asyncio.to_thread(tapo.moveMotor, 0, -degrees)
-                case Direction.RIGHT:
-                    await asyncio.to_thread(tapo.moveMotor, 0, degrees)
-                case Direction.UP:
-                    await asyncio.to_thread(tapo.moveMotor, degrees, 0)
-                case Direction.DOWN:
                     await asyncio.to_thread(tapo.moveMotor, -degrees, 0)
+                case Direction.RIGHT:
+                    await asyncio.to_thread(tapo.moveMotor, degrees, 0)
+                case Direction.UP:
+                    await asyncio.to_thread(tapo.moveMotor, 0, degrees)
+                case Direction.DOWN:
+                    await asyncio.to_thread(tapo.moveMotor, 0, -degrees)
 
             await asyncio.sleep(0.5)
 
@@ -233,3 +274,90 @@ class TapoCamera:
                 success=False,
                 message=f"Failed to go to preset: {e!s}",
             )
+
+    async def listen_audio(
+        self, duration: float = 5.0, transcribe: bool = False
+    ) -> AudioResult:
+        """
+        Record audio from the camera's microphone via RTSP stream.
+
+        Args:
+            duration: Duration in seconds to record (default: 5.0)
+            transcribe: If True, transcribe audio using Whisper (default: False)
+
+        Returns:
+            AudioResult with base64 encoded audio and optional transcript
+        """
+        self._ensure_connected()
+
+        rtsp_url = (
+            f"rtsp://{self._config.username}:{self._config.password}"
+            f"@{self._config.host}:554/stream1"
+        )
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = str(self._capture_dir / f"audio_{timestamp}.wav")
+
+        try:
+            cmd = [
+                "ffmpeg",
+                "-rtsp_transport", "tcp",
+                "-i", rtsp_url,
+                "-vn",  # No video
+                "-acodec", "pcm_s16le",  # PCM 16-bit
+                "-ar", "16000",  # 16kHz sample rate (good for speech)
+                "-ac", "1",  # Mono
+                "-t", str(duration),
+                "-y",
+                file_path,
+            ]
+
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(process.wait(), timeout=duration + 10.0)
+
+            with open(file_path, "rb") as f:
+                audio_data = f.read()
+
+            audio_base64 = base64.standard_b64encode(audio_data).decode("utf-8")
+
+            transcript = None
+            if transcribe:
+                transcript = await self._transcribe_audio(file_path)
+
+            return AudioResult(
+                audio_base64=audio_base64,
+                file_path=file_path,
+                timestamp=timestamp,
+                duration=duration,
+                transcript=transcript,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to record audio: {e!s}") from e
+
+    async def _transcribe_audio(self, audio_path: str) -> str | None:
+        """
+        Transcribe audio file using OpenAI Whisper.
+
+        Args:
+            audio_path: Path to the audio file
+
+        Returns:
+            Transcribed text or None if transcription fails
+        """
+        try:
+            import whisper
+        except ImportError:
+            return "[Whisper not installed. Run: pip install openai-whisper]"
+
+        try:
+            model = await asyncio.to_thread(whisper.load_model, "base")
+            result = await asyncio.to_thread(
+                model.transcribe, audio_path, language="ja"
+            )
+            return result.get("text", "").strip()
+        except Exception as e:
+            return f"[Transcription failed: {e!s}]"
