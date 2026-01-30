@@ -49,7 +49,7 @@
 ### ハードウェア
 - **USB ウェブカメラ**（任意）: nuroum V11 等
 - **Wi-Fi PTZ カメラ**（推奨）: TP-Link Tapo C210 または C220（約3,980円）
-- **GPU**（音声認識用）: NVIDIA GPU（Whisper用、RTX 3090推奨）
+- **GPU**（音声認識用）: NVIDIA GPU（Whisper用、GeForceシリーズのVRAM 8GB以上のグラボ推奨）
 
 ### ソフトウェア
 - Python 3.10+
