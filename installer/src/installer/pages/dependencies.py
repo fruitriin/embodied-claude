@@ -71,6 +71,10 @@ class DependenciesPage(QWizardPage):
             "uv": self._check_uv(),
         }
 
+        # Required dependencies (OpenCV is optional - only needed for USB cameras)
+        required = ["ffmpeg", "Python", "uv"]
+        optional = ["OpenCV"]
+
         # Display results
         for name, (installed, version) in results.items():
             item = QListWidgetItem()
@@ -78,12 +82,18 @@ class DependenciesPage(QWizardPage):
                 item.setText(f"✅ {name}: {version}")
                 item.setForeground(Qt.GlobalColor.darkGreen)
             else:
-                item.setText(f"❌ {name}: Not found")
-                item.setForeground(Qt.GlobalColor.red)
+                if name in optional:
+                    item.setText(f"⚠️ {name}: Not found (optional - needed for USB cameras)")
+                    item.setForeground(Qt.GlobalColor.darkYellow)
+                else:
+                    item.setText(f"❌ {name}: Not found")
+                    item.setForeground(Qt.GlobalColor.red)
             self.deps_list.addItem(item)
 
-        # Check if all satisfied
-        self.all_satisfied = all(installed for installed, _ in results.values())
+        # Check if all required dependencies are satisfied
+        self.all_satisfied = all(
+            installed for name, (installed, _) in results.items() if name in required
+        )
 
         if self.all_satisfied:
             self.status_label.setText("✅ All dependencies satisfied!")
@@ -169,8 +179,12 @@ class DependenciesPage(QWizardPage):
         if not results["OpenCV"][0]:
             html_parts.append(
                 """
-                <h4>OpenCV</h4>
-                <p>Will be installed automatically with uv during MCP server setup.</p>
+                <h4>OpenCV (Optional - for USB cameras only)</h4>
+                <p>If you plan to use USB webcams, install OpenCV:</p>
+                <ul>
+                    <li><code>pip install opencv-python</code></li>
+                </ul>
+                <p>OpenCV is not required if you only use Wi-Fi cameras (Tapo).</p>
                 """
             )
 
