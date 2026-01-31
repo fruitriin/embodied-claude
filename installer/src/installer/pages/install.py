@@ -29,6 +29,12 @@ class InstallationWorker(QThread):
             # Get repository path (assume installer is in embodied-claude/installer)
             repo_path = Path(__file__).parent.parent.parent.parent.absolute()
             self.progress.emit(f"📁 Repository path: {repo_path}")
+            self.progress.emit(f"📁 Path exists: {repo_path.exists()}")
+
+            # List subdirectories to verify
+            if repo_path.exists():
+                subdirs = [d.name for d in repo_path.iterdir() if d.is_dir()]
+                self.progress.emit(f"📁 Found directories: {', '.join(subdirs)}")
 
             # Create MCP configuration
             self.progress.emit("\n📝 Creating MCP configuration...")
@@ -44,15 +50,24 @@ class InstallationWorker(QThread):
             # Install dependencies for each enabled MCP server
             if self.config.get("wifi_camera_enabled"):
                 self.progress.emit("\n📦 Installing wifi-cam-mcp dependencies...")
-                self._run_uv_sync(repo_path / "wifi-cam-mcp")
+                wifi_cam_path = repo_path / "wifi-cam-mcp"
+                if not wifi_cam_path.exists():
+                    raise Exception(f"wifi-cam-mcp directory not found at {wifi_cam_path}")
+                self._run_uv_sync(wifi_cam_path)
 
             if self.config.get("usb_camera_enabled"):
                 self.progress.emit("\n📦 Installing usb-webcam-mcp dependencies...")
-                self._run_uv_sync(repo_path / "usb-webcam-mcp")
+                usb_cam_path = repo_path / "usb-webcam-mcp"
+                if not usb_cam_path.exists():
+                    raise Exception(f"usb-webcam-mcp directory not found at {usb_cam_path}")
+                self._run_uv_sync(usb_cam_path)
 
             if self.config.get("memory_enabled"):
                 self.progress.emit("\n📦 Installing memory-mcp dependencies...")
-                self._run_uv_sync(repo_path / "memory-mcp")
+                memory_path = repo_path / "memory-mcp"
+                if not memory_path.exists():
+                    raise Exception(f"memory-mcp directory not found at {memory_path}")
+                self._run_uv_sync(memory_path)
 
             self.progress.emit("\n✅ Installation completed successfully!")
             self.finished.emit(True, "Installation completed")
@@ -142,18 +157,27 @@ class InstallationWorker(QThread):
 
     def _run_uv_sync(self, directory):
         """Run uv sync in a directory"""
-        result = subprocess.run(
-            ["uv", "sync"],
-            cwd=directory,
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 minutes timeout
-        )
+        self.progress.emit(f"Running uv sync in: {directory}")
 
-        if result.returncode != 0:
-            raise Exception(f"uv sync failed: {result.stderr}")
+        # Ensure directory exists
+        if not directory.exists():
+            raise Exception(f"Directory does not exist: {directory}")
 
-        self.progress.emit(result.stdout)
+        try:
+            result = subprocess.run(
+                ["uv", "sync"],
+                cwd=str(directory),  # Convert Path to string for Windows compatibility
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minutes timeout
+            )
+
+            if result.returncode != 0:
+                raise Exception(f"uv sync failed in {directory.name}: {result.stderr}")
+
+            self.progress.emit(result.stdout)
+        except subprocess.TimeoutExpired:
+            raise Exception(f"uv sync timed out in {directory.name}")
 
 
 class InstallationPage(QWizardPage):
