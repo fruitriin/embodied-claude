@@ -91,12 +91,13 @@ uv sync
 
 # 環境変数を設定
 cp .env.example .env
-# .env を編集してカメラのIP、ユーザー名、パスワードを設定
+# .env を編集してカメラのIP、ユーザー名、パスワードを設定（後述）
 ```
 
 ##### Tapo カメラの設定（ハマりやすいので注意）：
 
 ###### 1. Tapo アプリでカメラをセットアップ
+
 こちらはマニュアル通りでOK
 
 ###### 2. Tapo アプリのカメラローカルアカウント作成
@@ -122,7 +123,7 @@ cp .env.example .env
 
 5. 「アカウント情報」を選択してユーザー名とパスワード（TP-Linkのものとは異なるので好きに設定してOK）を設定する
 
-既にカメラアカウント作成済みなので若干違う画面になっていますが、だいたい似た画面になるはずです。
+既にカメラアカウント作成済みなので若干違う画面になっていますが、だいたい似た画面になるはずです。ここで設定したユーザー名とパスワードを先述のファイルに入力します。
 
 ![account-make](https://github.com/user-attachments/assets/d3f57694-ca29-4681-98d5-20957bfad8a4)
 
@@ -130,7 +131,7 @@ cp .env.example .env
 
 ![t-link-config1](https://github.com/user-attachments/assets/dc23e345-2bfb-4ca2-a4ec-b5b0f43ec170)
 
-7. 「端末情報」のなかのIPアドレスを控えておく（あとで使用）
+7. 「端末情報」のなかのIPアドレスを先述の画面のファイルに入力
  
 <img width="1080" height="2400" alt="ip-address" src="https://github.com/user-attachments/assets/062cb89e-6cfd-4c52-873a-d9fc7cba5fa0" />
 
