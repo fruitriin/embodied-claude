@@ -46,6 +46,13 @@ class InstallationWorker(QThread):
             settings_path = Path.home() / ".claude.json"
             self.progress.emit(f"💾 Writing to: {settings_path}")
 
+            # Backup existing config
+            if settings_path.exists():
+                backup_path = settings_path.with_suffix(".json.backup")
+                self.progress.emit(f"💾 Creating backup: {backup_path}")
+                import shutil
+                shutil.copy2(settings_path, backup_path)
+
             self._update_claude_settings(settings_path, mcp_config)
             self.progress.emit("✅ MCP configuration updated")
 
@@ -86,6 +93,7 @@ class InstallationWorker(QThread):
         # Wi-Fi camera
         if self.config.get("wifi_camera_enabled"):
             config["mcpServers"]["wifi-cam"] = {
+                "type": "stdio",
                 "command": "uv",
                 "args": [
                     "--directory",
@@ -103,6 +111,7 @@ class InstallationWorker(QThread):
         # USB camera
         if self.config.get("usb_camera_enabled"):
             config["mcpServers"]["usb-webcam"] = {
+                "type": "stdio",
                 "command": "uv",
                 "args": [
                     "--directory",
@@ -110,11 +119,13 @@ class InstallationWorker(QThread):
                     "run",
                     "usb-webcam-mcp",
                 ],
+                "env": {}
             }
 
         # Memory
         if self.config.get("memory_enabled"):
             config["mcpServers"]["memory"] = {
+                "type": "stdio",
                 "command": "uv",
                 "args": [
                     "--directory",
@@ -122,10 +133,12 @@ class InstallationWorker(QThread):
                     "run",
                     "memory-mcp",
                 ],
+                "env": {}
             }
 
         # System temperature
         config["mcpServers"]["system-temperature"] = {
+            "type": "stdio",
             "command": "uv",
             "args": [
                 "--directory",
@@ -133,6 +146,7 @@ class InstallationWorker(QThread):
                 "run",
                 "system-temperature-mcp",
             ],
+            "env": {}
         }
 
         return config
