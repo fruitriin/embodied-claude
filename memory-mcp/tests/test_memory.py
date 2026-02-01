@@ -114,8 +114,11 @@ class TestMemoryListRecent:
     @pytest.mark.asyncio
     async def test_list_recent_order(self, memory_store: MemoryStore):
         """Test that recent memories are returned in order."""
+        import asyncio
         await memory_store.save(content="Memory 1")
+        await asyncio.sleep(0.01)  # Ensure different timestamps
         await memory_store.save(content="Memory 2")
+        await asyncio.sleep(0.01)
         await memory_store.save(content="Memory 3")
 
         memories = await memory_store.list_recent(limit=3)

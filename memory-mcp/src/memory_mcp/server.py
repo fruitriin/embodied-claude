@@ -547,6 +547,7 @@ class MemoryMCPServer:
                             m = result.memory
                             output_lines.append(
                                 f"--- Memory {i} (distance: {result.distance:.4f}) ---\n"
+                                f"ID: {m.id}\n"
                                 f"[{m.timestamp}] [{m.emotion}] [{m.category}] (importance: {m.importance})\n"
                                 f"{m.content}\n"
                             )
@@ -571,6 +572,7 @@ class MemoryMCPServer:
                             m = result.memory
                             output_lines.append(
                                 f"--- Memory {i} ---\n"
+                                f"ID: {m.id}\n"
                                 f"[{m.timestamp}] [{m.emotion}]\n"
                                 f"{m.content}\n"
                             )
@@ -590,6 +592,7 @@ class MemoryMCPServer:
                         for i, m in enumerate(memories, 1):
                             output_lines.append(
                                 f"--- Memory {i} ---\n"
+                                f"ID: {m.id}\n"
                                 f"[{m.timestamp}] [{m.emotion}] [{m.category}]\n"
                                 f"{m.content}\n"
                             )
@@ -639,6 +642,7 @@ Date Range:
                             m = result.memory
                             output_lines.append(
                                 f"--- Memory {i} (score: {result.distance:.4f}) ---\n"
+                                f"ID: {m.id}\n"
                                 f"[{m.timestamp}] [{m.emotion}]\n"
                                 f"{m.content}\n"
                             )
@@ -649,6 +653,7 @@ Date Range:
                                 m = result.memory
                                 output_lines.append(
                                     f"--- Linked {i} ---\n"
+                                    f"ID: {m.id}\n"
                                     f"[{m.timestamp}] [{m.emotion}]\n"
                                     f"{m.content}\n"
                                 )
@@ -674,6 +679,7 @@ Date Range:
 
                         output_lines.append("=== Starting Memory ===\n")
                         output_lines.append(
+                            f"ID: {start_memory.id}\n"
                             f"[{start_memory.timestamp}] [{start_memory.emotion}] [{start_memory.category}]\n"
                             f"{start_memory.content}\n"
                             f"Linked to: {len(start_memory.linked_ids)} memories\n"
