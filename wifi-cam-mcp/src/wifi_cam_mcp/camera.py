@@ -57,6 +57,14 @@ class MoveResult:
     message: str
 
 
+@dataclass
+class CameraPosition:
+    """Current camera PTZ position (tracked in software)."""
+
+    pan: int = 0  # -180 to +180 degrees (0 = center, negative = left, positive = right)
+    tilt: int = 0  # -90 to +90 degrees (0 = center, negative = down, positive = up)
+
+
 class TapoCamera:
     """Controller for Tapo C210 and similar PTZ cameras."""
 
@@ -65,6 +73,7 @@ class TapoCamera:
         self._capture_dir = Path(capture_dir)
         self._tapo: Tapo | None = None
         self._lock = asyncio.Lock()
+        self._position = CameraPosition()  # Track position in software
 
     async def connect(self) -> None:
         """Establish connection to camera."""
@@ -174,12 +183,16 @@ class TapoCamera:
             match direction:
                 case Direction.LEFT:
                     await asyncio.to_thread(tapo.moveMotor, -degrees, 0)
+                    self._position.pan = max(-180, self._position.pan - degrees)
                 case Direction.RIGHT:
                     await asyncio.to_thread(tapo.moveMotor, degrees, 0)
+                    self._position.pan = min(180, self._position.pan + degrees)
                 case Direction.UP:
                     await asyncio.to_thread(tapo.moveMotor, 0, degrees)
+                    self._position.tilt = min(90, self._position.tilt + degrees)
                 case Direction.DOWN:
                     await asyncio.to_thread(tapo.moveMotor, 0, -degrees)
+                    self._position.tilt = max(-90, self._position.tilt - degrees)
 
             await asyncio.sleep(0.5)
 
@@ -196,6 +209,14 @@ class TapoCamera:
                 success=False,
                 message=f"Failed to move: {e!s}",
             )
+
+    def get_position(self) -> CameraPosition:
+        """Get current camera position (tracked in software)."""
+        return CameraPosition(pan=self._position.pan, tilt=self._position.tilt)
+
+    def reset_position_tracking(self) -> None:
+        """Reset position tracking to center (0, 0). Call after manual calibration."""
+        self._position = CameraPosition()
 
     async def pan_left(self, degrees: int = 30) -> MoveResult:
         """Pan camera to the left."""

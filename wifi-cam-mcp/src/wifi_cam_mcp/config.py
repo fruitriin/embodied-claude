@@ -20,21 +20,56 @@ class CameraConfig:
     max_height: int = 1080
 
     @classmethod
-    def from_env(cls) -> "CameraConfig":
-        """Create config from environment variables."""
-        host = os.getenv("TAPO_CAMERA_HOST", "")
-        username = os.getenv("TAPO_USERNAME", "")
-        password = os.getenv("TAPO_PASSWORD", "")
-        stream_url = os.getenv("TAPO_STREAM_URL")
+    def from_env(cls, prefix: str = "TAPO") -> "CameraConfig":
+        """Create config from environment variables.
+
+        Args:
+            prefix: Environment variable prefix (default: "TAPO")
+                    For right camera, use "TAPO_RIGHT"
+        """
+        host = os.getenv(f"{prefix}_CAMERA_HOST", "") or os.getenv("TAPO_CAMERA_HOST", "")
+        username = os.getenv(f"{prefix}_USERNAME", "") or os.getenv("TAPO_USERNAME", "")
+        password = os.getenv(f"{prefix}_PASSWORD", "") or os.getenv("TAPO_PASSWORD", "")
+        stream_url = os.getenv(f"{prefix}_STREAM_URL") or os.getenv("TAPO_STREAM_URL")
         max_width = int(os.getenv("CAPTURE_MAX_WIDTH", "1920"))
         max_height = int(os.getenv("CAPTURE_MAX_HEIGHT", "1080"))
 
         if not host:
-            raise ValueError("TAPO_CAMERA_HOST environment variable is required")
+            raise ValueError(f"{prefix}_CAMERA_HOST environment variable is required")
         if not username:
-            raise ValueError("TAPO_USERNAME environment variable is required")
+            raise ValueError(f"{prefix}_USERNAME environment variable is required")
         if not password:
-            raise ValueError("TAPO_PASSWORD environment variable is required")
+            raise ValueError(f"{prefix}_PASSWORD environment variable is required")
+
+        return cls(
+            host=host,
+            username=username,
+            password=password,
+            stream_url=stream_url,
+            max_width=max_width,
+            max_height=max_height,
+        )
+
+    @classmethod
+    def right_camera_from_env(cls) -> "CameraConfig | None":
+        """Create config for right camera if configured.
+
+        Returns:
+            CameraConfig for right camera, or None if not configured
+        """
+        host = os.getenv("TAPO_RIGHT_CAMERA_HOST", "")
+        if not host:
+            return None
+
+        # Right camera can share username/password with left, or have its own
+        username = os.getenv("TAPO_RIGHT_USERNAME", "") or os.getenv("TAPO_USERNAME", "")
+        password = os.getenv("TAPO_RIGHT_PASSWORD", "") or os.getenv("TAPO_PASSWORD", "")
+        stream_url = os.getenv("TAPO_RIGHT_STREAM_URL")
+        max_width = int(os.getenv("CAPTURE_MAX_WIDTH", "1920"))
+        max_height = int(os.getenv("CAPTURE_MAX_HEIGHT", "1080"))
+
+        if not username or not password:
+            return None
 
         return cls(
             host=host,

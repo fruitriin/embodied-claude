@@ -1,6 +1,7 @@
 """Memory operations with ChromaDB."""
 
 import asyncio
+import json
 import math
 import uuid
 from datetime import datetime
@@ -9,7 +10,16 @@ from typing import Any
 import chromadb
 
 from .config import MemoryConfig
-from .types import Memory, MemorySearchResult, MemoryStats, ScoredMemory
+from .types import (
+    CameraPosition,
+    Memory,
+    MemoryLink,
+    MemorySearchResult,
+    MemoryStats,
+    ScoredMemory,
+    SensoryData,
+)
+from .working_memory import WorkingMemoryBuffer
 
 # 感情ブーストマップ: 強い感情は記憶に残りやすい
 EMOTION_BOOST_MAP: dict[str, float] = {
@@ -116,12 +126,56 @@ def _parse_linked_ids(linked_ids_str: str) -> tuple[str, ...]:
     return tuple(id.strip() for id in linked_ids_str.split(",") if id.strip())
 
 
+def _parse_sensory_data(sensory_data_json: str) -> tuple[SensoryData, ...]:
+    """JSON文字列からSensoryDataタプルに変換。"""
+    if not sensory_data_json:
+        return ()
+    try:
+        data_list = json.loads(sensory_data_json)
+        return tuple(SensoryData.from_dict(d) for d in data_list)
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return ()
+
+
+def _parse_camera_position(camera_position_json: str) -> CameraPosition | None:
+    """JSON文字列からCameraPositionに変換。"""
+    if not camera_position_json:
+        return None
+    try:
+        data = json.loads(camera_position_json)
+        return CameraPosition.from_dict(data)
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def _parse_tags(tags_str: str) -> tuple[str, ...]:
+    """カンマ区切りのタグ文字列をタプルに変換。"""
+    if not tags_str:
+        return ()
+    return tuple(tag.strip() for tag in tags_str.split(",") if tag.strip())
+
+
+def _parse_links(links_json: str) -> tuple[MemoryLink, ...]:
+    """JSON文字列からMemoryLinkタプルに変換。"""
+    if not links_json:
+        return ()
+    try:
+        data_list = json.loads(links_json)
+        return tuple(MemoryLink.from_dict(d) for d in data_list)
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return ()
+
+
 def _memory_from_metadata(
     memory_id: str,
     content: str,
     metadata: dict[str, Any],
 ) -> Memory:
-    """メタデータからMemoryオブジェクトを作成。"""
+    """メタデータからMemoryオブジェクトを作成（Phase 4対応）。"""
+    # episode_idの処理: 空文字列もNoneとして扱う
+    episode_id_raw = metadata.get("episode_id", "")
+    episode_id = episode_id_raw if episode_id_raw else None
+
     return Memory(
         id=memory_id,
         content=content,
@@ -132,30 +186,47 @@ def _memory_from_metadata(
         access_count=metadata.get("access_count", 0),
         last_accessed=metadata.get("last_accessed", ""),
         linked_ids=_parse_linked_ids(metadata.get("linked_ids", "")),
+        # Phase 4 フィールド
+        episode_id=episode_id,
+        sensory_data=_parse_sensory_data(metadata.get("sensory_data", "")),
+        camera_position=_parse_camera_position(metadata.get("camera_position", "")),
+        tags=_parse_tags(metadata.get("tags", "")),
+        # Phase 5: 因果リンク
+        links=_parse_links(metadata.get("links", "")),
     )
 
 
 class MemoryStore:
-    """ChromaDB-backed memory storage."""
+    """ChromaDB-backed memory storage (Phase 4: with working memory & episodes)."""
 
     def __init__(self, config: MemoryConfig):
         self._config = config
         self._client: chromadb.PersistentClient | None = None
-        self._collection: chromadb.Collection | None = None
+        self._collection: chromadb.Collection | None = None  # claude_memories
+        self._episodes_collection: chromadb.Collection | None = None  # Phase 4
         self._lock = asyncio.Lock()
+        # Phase 4: 作業記憶バッファ
+        self._working_memory = WorkingMemoryBuffer(capacity=20)
 
     async def connect(self) -> None:
-        """Initialize ChromaDB connection."""
+        """Initialize ChromaDB connection (Phase 4: with episodes collection)."""
         async with self._lock:
             if self._client is None:
                 self._client = await asyncio.to_thread(
                     chromadb.PersistentClient,
                     path=self._config.db_path,
                 )
+                # Phase 3: メインの記憶コレクション
                 self._collection = await asyncio.to_thread(
                     self._client.get_or_create_collection,
                     name=self._config.collection_name,
                     metadata={"description": "Claude's long-term memories"},
+                )
+                # Phase 4: エピソード記憶コレクション
+                self._episodes_collection = await asyncio.to_thread(
+                    self._client.get_or_create_collection,
+                    name="episodes",
+                    metadata={"description": "Episodic memories"},
                 )
 
     async def disconnect(self) -> None:
@@ -163,6 +234,7 @@ class MemoryStore:
         async with self._lock:
             self._client = None
             self._collection = None
+            self._episodes_collection = None
 
     def _ensure_connected(self) -> chromadb.Collection:
         """Ensure connected and return collection."""
@@ -176,8 +248,13 @@ class MemoryStore:
         emotion: str = "neutral",
         importance: int = 3,
         category: str = "daily",
+        # Phase 4 新規パラメータ
+        episode_id: str | None = None,
+        sensory_data: tuple[SensoryData, ...] = (),
+        camera_position: CameraPosition | None = None,
+        tags: tuple[str, ...] = (),
     ) -> Memory:
-        """Save a new memory."""
+        """Save a new memory (Phase 4: with sensory data & camera position)."""
         collection = self._ensure_connected()
 
         memory_id = str(uuid.uuid4())
@@ -191,6 +268,11 @@ class MemoryStore:
             emotion=emotion,
             importance=importance,
             category=category,
+            # Phase 4 フィールド
+            episode_id=episode_id,
+            sensory_data=sensory_data,
+            camera_position=camera_position,
+            tags=tags,
         )
 
         await asyncio.to_thread(
@@ -199,6 +281,9 @@ class MemoryStore:
             documents=[content],
             metadatas=[memory.to_metadata()],
         )
+
+        # Phase 4: 作業記憶にも追加
+        await self._working_memory.add(memory)
 
         return memory
 
@@ -742,3 +827,283 @@ class MemoryStore:
         ]
 
         return main_results + linked_results
+
+    # Phase 4: 新規メソッド
+
+    def get_working_memory(self) -> WorkingMemoryBuffer:
+        """作業記憶バッファへのアクセス.
+
+        Returns:
+            WorkingMemoryBufferインスタンス
+        """
+        return self._working_memory
+
+    def get_episodes_collection(self) -> chromadb.Collection:
+        """エピソードコレクションへのアクセス.
+
+        Returns:
+            episodesコレクション
+
+        Raises:
+            RuntimeError: 未接続の場合
+        """
+        if self._episodes_collection is None:
+            raise RuntimeError("MemoryStore not connected. Call connect() first.")
+        return self._episodes_collection
+
+    async def get_by_ids(self, memory_ids: list[str]) -> list[Memory]:
+        """複数の記憶IDから記憶を取得.
+
+        Args:
+            memory_ids: 取得する記憶のIDリスト
+
+        Returns:
+            記憶のリスト（IDの順序は保証されない）
+        """
+        if not memory_ids:
+            return []
+
+        collection = self._ensure_connected()
+
+        results = await asyncio.to_thread(
+            collection.get,
+            ids=memory_ids,
+        )
+
+        memories: list[Memory] = []
+        if results and results.get("ids"):
+            for i, memory_id in enumerate(results["ids"]):
+                content = results["documents"][i] if results.get("documents") else ""
+                metadata = (
+                    results["metadatas"][i] if results.get("metadatas") else {}
+                )
+                memory = _memory_from_metadata(memory_id, content, metadata)
+                memories.append(memory)
+
+        return memories
+
+    async def update_episode_id(
+        self,
+        memory_id: str,
+        episode_id: str,
+    ) -> None:
+        """記憶のepisode_idを更新.
+
+        Args:
+            memory_id: 更新する記憶のID
+            episode_id: 設定するエピソードID
+        """
+        collection = self._ensure_connected()
+
+        # 既存のメタデータを取得
+        result = await asyncio.to_thread(
+            collection.get,
+            ids=[memory_id],
+        )
+
+        if not result or not result.get("ids"):
+            raise ValueError(f"Memory not found: {memory_id}")
+
+        metadata = result["metadatas"][0] if result.get("metadatas") else {}
+        metadata["episode_id"] = episode_id
+
+        # メタデータを更新
+        await asyncio.to_thread(
+            collection.update,
+            ids=[memory_id],
+            metadatas=[metadata],
+        )
+
+    async def search_important_memories(
+        self,
+        min_importance: int = 4,
+        min_access_count: int = 5,
+        since: str | None = None,
+        n_results: int = 10,
+    ) -> list[Memory]:
+        """重要度とアクセス頻度でフィルタして記憶を取得.
+
+        Args:
+            min_importance: 最小重要度
+            min_access_count: 最小アクセス回数
+            since: この日時以降にアクセスされた記憶（ISO 8601）
+            n_results: 最大取得数
+
+        Returns:
+            フィルタ条件を満たす記憶のリスト
+        """
+        collection = self._ensure_connected()
+
+        # フィルタ条件を構築
+        where_conditions: list[dict[str, Any]] = [
+            {"importance": {"$gte": min_importance}},
+            {"access_count": {"$gte": min_access_count}},
+        ]
+
+        if since:
+            where_conditions.append({"last_accessed": {"$gte": since}})
+
+        where: dict[str, Any] = {"$and": where_conditions}
+
+        # 全記憶を取得してフィルタ
+        # （ChromaDBのget()はwhereフィルタをサポート）
+        results = await asyncio.to_thread(
+            collection.get,
+            where=where,
+        )
+
+        memories: list[Memory] = []
+        if results and results.get("ids"):
+            for i, memory_id in enumerate(results["ids"]):
+                content = results["documents"][i] if results.get("documents") else ""
+                metadata = (
+                    results["metadatas"][i] if results.get("metadatas") else {}
+                )
+                memory = _memory_from_metadata(memory_id, content, metadata)
+                memories.append(memory)
+
+        # 最新順にソート
+        memories.sort(key=lambda m: m.last_accessed, reverse=True)
+
+        return memories[:n_results]
+
+    async def get_all(self) -> list[Memory]:
+        """全記憶を取得（カメラ位置検索用）.
+
+        Returns:
+            全記憶のリスト
+        """
+        collection = self._ensure_connected()
+
+        results = await asyncio.to_thread(
+            collection.get,
+        )
+
+        memories: list[Memory] = []
+        if results and results.get("ids"):
+            for i, memory_id in enumerate(results["ids"]):
+                content = results["documents"][i] if results.get("documents") else ""
+                metadata = (
+                    results["metadatas"][i] if results.get("metadatas") else {}
+                )
+                memory = _memory_from_metadata(memory_id, content, metadata)
+                memories.append(memory)
+
+        return memories
+
+    # Phase 5: 因果リンク
+
+    async def add_causal_link(
+        self,
+        source_id: str,
+        target_id: str,
+        link_type: str = "caused_by",
+        note: str | None = None,
+    ) -> None:
+        """因果リンクを追加（単方向）.
+
+        Args:
+            source_id: リンク元の記憶ID
+            target_id: リンク先の記憶ID
+            link_type: リンクタイプ ("caused_by", "leads_to", "related", "similar")
+            note: リンクの説明（任意）
+        """
+        collection = self._ensure_connected()
+
+        # ソース記憶を取得
+        source_memory = await self.get_by_id(source_id)
+        if source_memory is None:
+            raise ValueError(f"Source memory not found: {source_id}")
+
+        # ターゲット記憶が存在するか確認
+        target_memory = await self.get_by_id(target_id)
+        if target_memory is None:
+            raise ValueError(f"Target memory not found: {target_id}")
+
+        # 新しいリンクを作成
+        new_link = MemoryLink(
+            target_id=target_id,
+            link_type=link_type,
+            created_at=datetime.now().isoformat(),
+            note=note,
+        )
+
+        # 既存のリンクに追加（重複チェック）
+        existing_links = list(source_memory.links)
+        for link in existing_links:
+            if link.target_id == target_id and link.link_type == link_type:
+                return  # 既に同じリンクが存在
+
+        updated_links = tuple(existing_links + [new_link])
+
+        # メタデータを更新
+        results = await asyncio.to_thread(
+            collection.get,
+            ids=[source_id],
+        )
+
+        if results and results.get("metadatas"):
+            metadata = results["metadatas"][0]
+            metadata["links"] = json.dumps([link.to_dict() for link in updated_links])
+
+            await asyncio.to_thread(
+                collection.update,
+                ids=[source_id],
+                metadatas=[metadata],
+            )
+
+    async def get_causal_chain(
+        self,
+        memory_id: str,
+        direction: str = "backward",
+        max_depth: int = 5,
+    ) -> list[tuple[Memory, str]]:
+        """因果の連鎖を辿る.
+
+        Args:
+            memory_id: 起点の記憶ID
+            direction: "backward" (原因を辿る) or "forward" (結果を辿る)
+            max_depth: 最大深度（1-5）
+
+        Returns:
+            [(Memory, link_type), ...] の形式
+        """
+        max_depth = max(1, min(5, max_depth))
+
+        # 方向によって辿るリンクタイプを決定
+        if direction == "backward":
+            target_link_types = {"caused_by"}
+        elif direction == "forward":
+            target_link_types = {"leads_to"}
+        else:
+            raise ValueError(f"Invalid direction: {direction}")
+
+        visited: set[str] = set()
+        result: list[tuple[Memory, str]] = []
+        current_ids = [memory_id]
+
+        for _ in range(max_depth):
+            next_ids: list[str] = []
+
+            for mem_id in current_ids:
+                if mem_id in visited:
+                    continue
+                visited.add(mem_id)
+
+                memory = await self.get_by_id(mem_id)
+                if memory is None:
+                    continue
+
+                # 該当するリンクタイプのリンクを探す
+                for link in memory.links:
+                    if link.link_type in target_link_types:
+                        target_memory = await self.get_by_id(link.target_id)
+                        if target_memory and link.target_id not in visited:
+                            result.append((target_memory, link.link_type))
+                            next_ids.append(link.target_id)
+
+            current_ids = next_ids
+            if not current_ids:
+                break
+
+        return result
