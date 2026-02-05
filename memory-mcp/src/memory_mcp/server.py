@@ -11,7 +11,10 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 from .config import MemoryConfig, ServerConfig
+from .episode import EpisodeManager
 from .memory import MemoryStore
+from .sensory import SensoryIntegration
+from .types import CameraPosition
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,6 +26,8 @@ class MemoryMCPServer:
     def __init__(self):
         self._server = Server("memory-mcp")
         self._memory_store: MemoryStore | None = None
+        self._episode_manager: EpisodeManager | None = None  # Phase 4.2
+        self._sensory_integration: SensoryIntegration | None = None  # Phase 4.3
         self._server_config = ServerConfig.from_env()
         self._setup_handlers()
 
@@ -218,6 +223,266 @@ class MemoryMCPServer:
                         "required": ["memory_id"],
                     },
                 ),
+                # Phase 4: Episode Memory Tools
+                Tool(
+                    name="create_episode",
+                    description="Create an episode from recent memories. Use this to group related experiences into a story (e.g., 'Morning sky search').",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "Episode title (e.g., 'Morning sky search')",
+                            },
+                            "memory_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "List of memory IDs to include in the episode",
+                            },
+                            "participants": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "People involved in the episode (optional)",
+                                "default": [],
+                            },
+                            "auto_summarize": {
+                                "type": "boolean",
+                                "description": "Auto-generate summary from memories",
+                                "default": True,
+                            },
+                        },
+                        "required": ["title", "memory_ids"],
+                    },
+                ),
+                Tool(
+                    name="search_episodes",
+                    description="Search through past episodes. Find a sequence of experiences by topic.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Search query for episodes",
+                            },
+                            "n_results": {
+                                "type": "integer",
+                                "description": "Maximum number of results",
+                                "default": 5,
+                                "minimum": 1,
+                                "maximum": 20,
+                            },
+                        },
+                        "required": ["query"],
+                    },
+                ),
+                Tool(
+                    name="get_episode_memories",
+                    description="Get all memories in a specific episode, in chronological order.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "episode_id": {
+                                "type": "string",
+                                "description": "Episode ID",
+                            },
+                        },
+                        "required": ["episode_id"],
+                    },
+                ),
+                # Phase 4.3: Sensory Integration Tools
+                Tool(
+                    name="save_visual_memory",
+                    description="Save a memory with visual data (image path and camera position). Use this when you see something with your camera.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": "Memory content (e.g., 'Found the morning sky')",
+                            },
+                            "image_path": {
+                                "type": "string",
+                                "description": "Path to the captured image file",
+                            },
+                            "camera_position": {
+                                "type": "object",
+                                "description": "Camera pan/tilt position",
+                                "properties": {
+                                    "pan_angle": {
+                                        "type": "integer",
+                                        "description": "Pan angle (-90 to +90)",
+                                    },
+                                    "tilt_angle": {
+                                        "type": "integer",
+                                        "description": "Tilt angle (-90 to +90)",
+                                    },
+                                    "preset_id": {
+                                        "type": "string",
+                                        "description": "Preset ID (optional)",
+                                    },
+                                },
+                                "required": ["pan_angle", "tilt_angle"],
+                            },
+                            "emotion": {
+                                "type": "string",
+                                "description": "Emotion",
+                                "default": "neutral",
+                                "enum": ["happy", "sad", "surprised", "moved", "excited", "nostalgic", "curious", "neutral"],
+                            },
+                            "importance": {
+                                "type": "integer",
+                                "description": "Importance (1-5)",
+                                "default": 3,
+                                "minimum": 1,
+                                "maximum": 5,
+                            },
+                        },
+                        "required": ["content", "image_path", "camera_position"],
+                    },
+                ),
+                Tool(
+                    name="save_audio_memory",
+                    description="Save a memory with audio data (audio file path and transcript). Use this when you hear something.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": "Memory content (e.g., 'Heard a greeting')",
+                            },
+                            "audio_path": {
+                                "type": "string",
+                                "description": "Path to the audio file",
+                            },
+                            "transcript": {
+                                "type": "string",
+                                "description": "Transcribed text from audio (e.g., from Whisper)",
+                            },
+                            "emotion": {
+                                "type": "string",
+                                "description": "Emotion",
+                                "default": "neutral",
+                                "enum": ["happy", "sad", "surprised", "moved", "excited", "nostalgic", "curious", "neutral"],
+                            },
+                            "importance": {
+                                "type": "integer",
+                                "description": "Importance (1-5)",
+                                "default": 3,
+                                "minimum": 1,
+                                "maximum": 5,
+                            },
+                        },
+                        "required": ["content", "audio_path", "transcript"],
+                    },
+                ),
+                Tool(
+                    name="recall_by_camera_position",
+                    description="Recall memories by camera direction. Find what you saw when looking in a specific direction.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "pan_angle": {
+                                "type": "integer",
+                                "description": "Pan angle (-90 to +90)",
+                            },
+                            "tilt_angle": {
+                                "type": "integer",
+                                "description": "Tilt angle (-90 to +90)",
+                            },
+                            "tolerance": {
+                                "type": "integer",
+                                "description": "Angle tolerance (default ±15 degrees)",
+                                "default": 15,
+                                "minimum": 1,
+                                "maximum": 90,
+                            },
+                        },
+                        "required": ["pan_angle", "tilt_angle"],
+                    },
+                ),
+                # Phase 4.4: Working Memory Tools
+                Tool(
+                    name="get_working_memory",
+                    description="Get recent memories from working memory buffer (fast access). Use this to quickly recall what just happened.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "n_results": {
+                                "type": "integer",
+                                "description": "Number of recent memories to get",
+                                "default": 10,
+                                "minimum": 1,
+                                "maximum": 20,
+                            },
+                        },
+                        "required": [],
+                    },
+                ),
+                Tool(
+                    name="refresh_working_memory",
+                    description="Refresh working memory with important and frequently accessed memories from long-term storage.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                    },
+                ),
+                # Phase 5: Causal Links
+                Tool(
+                    name="link_memories",
+                    description="Create a causal or relational link between two memories. Use this to record 'A caused B' or 'A leads to B' relationships.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "source_id": {
+                                "type": "string",
+                                "description": "ID of the source memory",
+                            },
+                            "target_id": {
+                                "type": "string",
+                                "description": "ID of the target memory",
+                            },
+                            "link_type": {
+                                "type": "string",
+                                "description": "Type of link",
+                                "default": "caused_by",
+                                "enum": ["similar", "caused_by", "leads_to", "related"],
+                            },
+                            "note": {
+                                "type": "string",
+                                "description": "Optional note explaining the link",
+                            },
+                        },
+                        "required": ["source_id", "target_id"],
+                    },
+                ),
+                Tool(
+                    name="get_causal_chain",
+                    description="Trace the causal chain of a memory. Find what caused this memory (backward) or what it led to (forward).",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "memory_id": {
+                                "type": "string",
+                                "description": "ID of the starting memory",
+                            },
+                            "direction": {
+                                "type": "string",
+                                "description": "Direction to trace: 'backward' (find causes) or 'forward' (find effects)",
+                                "default": "backward",
+                                "enum": ["backward", "forward"],
+                            },
+                            "max_depth": {
+                                "type": "integer",
+                                "description": "How deep to trace the chain (1-5)",
+                                "default": 3,
+                                "minimum": 1,
+                                "maximum": 5,
+                            },
+                        },
+                        "required": ["memory_id"],
+                    },
+                ),
             ]
 
         @self._server.call_tool()
@@ -282,6 +547,7 @@ class MemoryMCPServer:
                             m = result.memory
                             output_lines.append(
                                 f"--- Memory {i} (distance: {result.distance:.4f}) ---\n"
+                                f"ID: {m.id}\n"
                                 f"[{m.timestamp}] [{m.emotion}] [{m.category}] (importance: {m.importance})\n"
                                 f"{m.content}\n"
                             )
@@ -306,6 +572,7 @@ class MemoryMCPServer:
                             m = result.memory
                             output_lines.append(
                                 f"--- Memory {i} ---\n"
+                                f"ID: {m.id}\n"
                                 f"[{m.timestamp}] [{m.emotion}]\n"
                                 f"{m.content}\n"
                             )
@@ -325,6 +592,7 @@ class MemoryMCPServer:
                         for i, m in enumerate(memories, 1):
                             output_lines.append(
                                 f"--- Memory {i} ---\n"
+                                f"ID: {m.id}\n"
                                 f"[{m.timestamp}] [{m.emotion}] [{m.category}]\n"
                                 f"{m.content}\n"
                             )
@@ -374,6 +642,7 @@ Date Range:
                             m = result.memory
                             output_lines.append(
                                 f"--- Memory {i} (score: {result.distance:.4f}) ---\n"
+                                f"ID: {m.id}\n"
                                 f"[{m.timestamp}] [{m.emotion}]\n"
                                 f"{m.content}\n"
                             )
@@ -384,6 +653,7 @@ Date Range:
                                 m = result.memory
                                 output_lines.append(
                                     f"--- Linked {i} ---\n"
+                                    f"ID: {m.id}\n"
                                     f"[{m.timestamp}] [{m.emotion}]\n"
                                     f"{m.content}\n"
                                 )
@@ -409,6 +679,7 @@ Date Range:
 
                         output_lines.append("=== Starting Memory ===\n")
                         output_lines.append(
+                            f"ID: {start_memory.id}\n"
                             f"[{start_memory.timestamp}] [{start_memory.emotion}] [{start_memory.category}]\n"
                             f"{start_memory.content}\n"
                             f"Linked to: {len(start_memory.linked_ids)} memories\n"
@@ -427,6 +698,322 @@ Date Range:
 
                         return [TextContent(type="text", text="\n".join(output_lines))]
 
+                    # Phase 4: Episode Tools
+                    case "create_episode":
+                        if self._episode_manager is None:
+                            return [TextContent(type="text", text="Error: Episode manager not initialized")]
+
+                        title = arguments.get("title", "")
+                        if not title:
+                            return [TextContent(type="text", text="Error: title is required")]
+
+                        memory_ids = arguments.get("memory_ids", [])
+                        if not memory_ids:
+                            return [TextContent(type="text", text="Error: memory_ids is required")]
+
+                        episode = await self._episode_manager.create_episode(
+                            title=title,
+                            memory_ids=memory_ids,
+                            participants=arguments.get("participants"),
+                            auto_summarize=arguments.get("auto_summarize", True),
+                        )
+
+                        return [
+                            TextContent(
+                                type="text",
+                                text=f"Episode created!\n"
+                                     f"ID: {episode.id}\n"
+                                     f"Title: {episode.title}\n"
+                                     f"Memories: {len(episode.memory_ids)}\n"
+                                     f"Time: {episode.start_time} - {episode.end_time}\n"
+                                     f"Emotion: {episode.emotion}\n"
+                                     f"Importance: {episode.importance}\n"
+                                     f"Summary: {episode.summary[:100]}...",
+                            )
+                        ]
+
+                    case "search_episodes":
+                        if self._episode_manager is None:
+                            return [TextContent(type="text", text="Error: Episode manager not initialized")]
+
+                        query = arguments.get("query", "")
+                        if not query:
+                            return [TextContent(type="text", text="Error: query is required")]
+
+                        episodes = await self._episode_manager.search_episodes(
+                            query=query,
+                            n_results=arguments.get("n_results", 5),
+                        )
+
+                        if not episodes:
+                            return [TextContent(type="text", text="No episodes found matching the query.")]
+
+                        output_lines = [f"Found {len(episodes)} episodes:\n"]
+                        for i, ep in enumerate(episodes, 1):
+                            output_lines.append(
+                                f"--- Episode {i} ---\n"
+                                f"ID: {ep.id}\n"
+                                f"Title: {ep.title}\n"
+                                f"Time: {ep.start_time} - {ep.end_time}\n"
+                                f"Memories: {len(ep.memory_ids)}\n"
+                                f"Emotion: {ep.emotion} | Importance: {ep.importance}\n"
+                                f"Summary: {ep.summary[:80]}...\n"
+                            )
+
+                        return [TextContent(type="text", text="\n".join(output_lines))]
+
+                    case "get_episode_memories":
+                        if self._episode_manager is None:
+                            return [TextContent(type="text", text="Error: Episode manager not initialized")]
+
+                        episode_id = arguments.get("episode_id", "")
+                        if not episode_id:
+                            return [TextContent(type="text", text="Error: episode_id is required")]
+
+                        memories = await self._episode_manager.get_episode_memories(episode_id)
+
+                        output_lines = [f"Episode memories ({len(memories)} total):\n"]
+                        for i, m in enumerate(memories, 1):
+                            output_lines.append(
+                                f"--- Memory {i} ---\n"
+                                f"ID: {m.id}\n"
+                                f"Time: {m.timestamp}\n"
+                                f"Content: {m.content}\n"
+                                f"Emotion: {m.emotion} | Importance: {m.importance}\n"
+                            )
+
+                        return [TextContent(type="text", text="\n".join(output_lines))]
+
+                    # Phase 4.3: Sensory Integration Tools
+                    case "save_visual_memory":
+                        if self._sensory_integration is None:
+                            return [TextContent(type="text", text="Error: Sensory integration not initialized")]
+
+                        content = arguments.get("content", "")
+                        if not content:
+                            return [TextContent(type="text", text="Error: content is required")]
+
+                        image_path = arguments.get("image_path", "")
+                        if not image_path:
+                            return [TextContent(type="text", text="Error: image_path is required")]
+
+                        camera_pos_data = arguments.get("camera_position")
+                        if not camera_pos_data:
+                            return [TextContent(type="text", text="Error: camera_position is required")]
+
+                        # Create CameraPosition from dict
+                        camera_position = CameraPosition(
+                            pan_angle=camera_pos_data["pan_angle"],
+                            tilt_angle=camera_pos_data["tilt_angle"],
+                            preset_id=camera_pos_data.get("preset_id"),
+                        )
+
+                        memory = await self._sensory_integration.save_visual_memory(
+                            content=content,
+                            image_path=image_path,
+                            camera_position=camera_position,
+                            emotion=arguments.get("emotion", "neutral"),
+                            importance=arguments.get("importance", 3),
+                        )
+
+                        return [
+                            TextContent(
+                                type="text",
+                                text=f"Visual memory saved!\n"
+                                     f"ID: {memory.id}\n"
+                                     f"Content: {memory.content}\n"
+                                     f"Image: {image_path}\n"
+                                     f"Camera: pan={camera_position.pan_angle}°, tilt={camera_position.tilt_angle}°\n"
+                                     f"Emotion: {memory.emotion} | Importance: {memory.importance}",
+                            )
+                        ]
+
+                    case "save_audio_memory":
+                        if self._sensory_integration is None:
+                            return [TextContent(type="text", text="Error: Sensory integration not initialized")]
+
+                        content = arguments.get("content", "")
+                        if not content:
+                            return [TextContent(type="text", text="Error: content is required")]
+
+                        audio_path = arguments.get("audio_path", "")
+                        if not audio_path:
+                            return [TextContent(type="text", text="Error: audio_path is required")]
+
+                        transcript = arguments.get("transcript", "")
+                        if not transcript:
+                            return [TextContent(type="text", text="Error: transcript is required")]
+
+                        memory = await self._sensory_integration.save_audio_memory(
+                            content=content,
+                            audio_path=audio_path,
+                            transcript=transcript,
+                            emotion=arguments.get("emotion", "neutral"),
+                            importance=arguments.get("importance", 3),
+                        )
+
+                        return [
+                            TextContent(
+                                type="text",
+                                text=f"Audio memory saved!\n"
+                                     f"ID: {memory.id}\n"
+                                     f"Content: {memory.content}\n"
+                                     f"Audio: {audio_path}\n"
+                                     f"Transcript: {transcript}\n"
+                                     f"Emotion: {memory.emotion} | Importance: {memory.importance}",
+                            )
+                        ]
+
+                    case "recall_by_camera_position":
+                        if self._sensory_integration is None:
+                            return [TextContent(type="text", text="Error: Sensory integration not initialized")]
+
+                        pan_angle = arguments.get("pan_angle")
+                        tilt_angle = arguments.get("tilt_angle")
+
+                        if pan_angle is None or tilt_angle is None:
+                            return [TextContent(type="text", text="Error: pan_angle and tilt_angle are required")]
+
+                        memories = await self._sensory_integration.recall_by_camera_position(
+                            pan_angle=pan_angle,
+                            tilt_angle=tilt_angle,
+                            tolerance=arguments.get("tolerance", 15),
+                        )
+
+                        if not memories:
+                            return [
+                                TextContent(
+                                    type="text",
+                                    text=f"No memories found at camera position pan={pan_angle}°, tilt={tilt_angle}°",
+                                )
+                            ]
+
+                        output_lines = [
+                            f"Found {len(memories)} memories at camera position pan={pan_angle}°, tilt={tilt_angle}°:\n"
+                        ]
+                        for i, m in enumerate(memories, 1):
+                            cam_pos = f"pan={m.camera_position.pan_angle}°, tilt={m.camera_position.tilt_angle}°" if m.camera_position else "N/A"
+                            output_lines.append(
+                                f"--- Memory {i} ---\n"
+                                f"Time: {m.timestamp}\n"
+                                f"Content: {m.content}\n"
+                                f"Camera: {cam_pos}\n"
+                                f"Emotion: {m.emotion} | Importance: {m.importance}\n"
+                            )
+
+                        return [TextContent(type="text", text="\n".join(output_lines))]
+
+                    # Phase 4.4: Working Memory Tools
+                    case "get_working_memory":
+                        working_memory = self._memory_store.get_working_memory()
+                        n_results = arguments.get("n_results", 10)
+
+                        memories = await working_memory.get_recent(n_results)
+
+                        if not memories:
+                            return [
+                                TextContent(
+                                    type="text",
+                                    text="Working memory is empty. No recent memories.",
+                                )
+                            ]
+
+                        output_lines = [
+                            f"Working memory ({len(memories)} recent memories):\n"
+                        ]
+                        for i, m in enumerate(memories, 1):
+                            output_lines.append(
+                                f"--- {i}. [{m.timestamp}] ---\n"
+                                f"Content: {m.content}\n"
+                                f"Emotion: {m.emotion} | Importance: {m.importance}\n"
+                            )
+
+                        return [TextContent(type="text", text="\n".join(output_lines))]
+
+                    case "refresh_working_memory":
+                        working_memory = self._memory_store.get_working_memory()
+
+                        await working_memory.refresh_important(self._memory_store)
+
+                        size = working_memory.size()
+                        return [
+                            TextContent(
+                                type="text",
+                                text=f"Working memory refreshed. Now contains {size} memories.",
+                            )
+                        ]
+
+                    # Phase 5: Causal Links
+                    case "link_memories":
+                        source_id = arguments.get("source_id", "")
+                        if not source_id:
+                            return [TextContent(type="text", text="Error: source_id is required")]
+
+                        target_id = arguments.get("target_id", "")
+                        if not target_id:
+                            return [TextContent(type="text", text="Error: target_id is required")]
+
+                        link_type = arguments.get("link_type", "caused_by")
+                        note = arguments.get("note")
+
+                        await self._memory_store.add_causal_link(
+                            source_id=source_id,
+                            target_id=target_id,
+                            link_type=link_type,
+                            note=note,
+                        )
+
+                        return [
+                            TextContent(
+                                type="text",
+                                text=f"Link created!\n"
+                                     f"Source: {source_id[:8]}...\n"
+                                     f"Target: {target_id[:8]}...\n"
+                                     f"Type: {link_type}\n"
+                                     f"Note: {note or '(none)'}",
+                            )
+                        ]
+
+                    case "get_causal_chain":
+                        memory_id = arguments.get("memory_id", "")
+                        if not memory_id:
+                            return [TextContent(type="text", text="Error: memory_id is required")]
+
+                        direction = arguments.get("direction", "backward")
+                        max_depth = arguments.get("max_depth", 3)
+
+                        # 起点の記憶を取得
+                        start_memory = await self._memory_store.get_by_id(memory_id)
+                        if not start_memory:
+                            return [TextContent(type="text", text="Error: Memory not found")]
+
+                        chain = await self._memory_store.get_causal_chain(
+                            memory_id=memory_id,
+                            direction=direction,
+                            max_depth=max_depth,
+                        )
+
+                        direction_label = "causes" if direction == "backward" else "effects"
+                        output_lines = [
+                            f"Causal chain ({direction_label}) starting from {memory_id[:8]}...:\n",
+                            f"=== Starting Memory ===\n",
+                            f"[{start_memory.timestamp}] [{start_memory.emotion}]\n",
+                            f"{start_memory.content}\n",
+                        ]
+
+                        if chain:
+                            output_lines.append(f"\n=== {direction_label.title()} ({len(chain)} memories) ===\n")
+                            for i, (mem, link_type) in enumerate(chain, 1):
+                                output_lines.append(
+                                    f"--- {i}. [{link_type}] {mem.id[:8]}... ---\n"
+                                    f"[{mem.timestamp}] [{mem.emotion}]\n"
+                                    f"{mem.content}\n"
+                                )
+                        else:
+                            output_lines.append(f"\nNo {direction_label} found.\n")
+
+                        return [TextContent(type="text", text="\n".join(output_lines))]
+
                     case _:
                         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
@@ -435,11 +1022,20 @@ Date Range:
                 return [TextContent(type="text", text=f"Error: {e!s}")]
 
     async def connect_memory(self) -> None:
-        """Connect to memory store."""
+        """Connect to memory store (Phase 4: with episode manager & sensory integration)."""
         config = MemoryConfig.from_env()
         self._memory_store = MemoryStore(config)
         await self._memory_store.connect()
         logger.info(f"Connected to memory store at {config.db_path}")
+
+        # Phase 4.2: Initialize episode manager
+        episodes_collection = self._memory_store.get_episodes_collection()
+        self._episode_manager = EpisodeManager(self._memory_store, episodes_collection)
+        logger.info("Episode manager initialized")
+
+        # Phase 4.3: Initialize sensory integration
+        self._sensory_integration = SensoryIntegration(self._memory_store)
+        logger.info("Sensory integration initialized")
 
     async def disconnect_memory(self) -> None:
         """Disconnect from memory store."""
