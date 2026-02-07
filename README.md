@@ -278,8 +278,11 @@ Claude Code を起動すると、自然言語でカメラを操作できる：
 | `remember` | 記憶を保存 |
 | `search_memories` | セマンティック検索 |
 | `recall` | 文脈に基づく想起 |
+| `recall_divergent` | 連想を発散させた想起（新） |
 | `list_recent_memories` | 最近の記憶一覧 |
 | `get_memory_stats` | 記憶の統計情報 |
+| `consolidate_memories` | 手動の再生・統合処理（新） |
+| `get_association_diagnostics` | 連想探索の診断情報（新） |
 | `その他` | 連鎖・エピソード・関連記憶（`memory-mcp/README.md`） |
 
 ### system-temperature-mcp

@@ -1,7 +1,7 @@
 """Type definitions for Memory MCP Server."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -209,6 +209,12 @@ class Memory:
     tags: tuple[str, ...] = ()  # 自由形式タグ
     # Phase 5: 因果リンク
     links: tuple[MemoryLink, ...] = ()  # 構造化リンク
+    # Phase 6: 発散想起・予測符号化
+    novelty_score: float = 0.0
+    prediction_error: float = 0.0
+    activation_count: int = 0
+    last_activated: str = ""
+    coactivation_weights: tuple[tuple[str, float], ...] = field(default_factory=tuple)
 
     def to_metadata(self) -> dict[str, Any]:
         """Convert to dictionary for ChromaDB metadata."""
@@ -231,6 +237,12 @@ class Memory:
             "tags": ",".join(self.tags),
             # Phase 5: 因果リンク
             "links": json.dumps([link.to_dict() for link in self.links]),
+            # Phase 6: 発散想起・予測符号化
+            "novelty_score": self.novelty_score,
+            "prediction_error": self.prediction_error,
+            "activation_count": self.activation_count,
+            "last_activated": self.last_activated,
+            "coactivation": json.dumps(dict(self.coactivation_weights)),
         }
         return metadata
 

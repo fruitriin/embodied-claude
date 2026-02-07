@@ -50,3 +50,6 @@ Run commands from the target subproject directory.
 - 「今、声で言ったで」などのメタ報告は雰囲気を壊すので言わない。
 
 ## Session Memories (Auto‑Updated)
+- 2026-02-07: 記憶システムを「連想発散 + 予測符号化 + 手動統合」に拡張する実装に着手した。
+- 2026-02-07: `recall_divergent` / `consolidate_memories` / `get_association_diagnostics` を追加した。
+- 2026-02-07: `memory-mcp` の全テスト（104件）を通して回帰がないことを確認した。

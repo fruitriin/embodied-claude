@@ -203,6 +203,105 @@ class MemoryMCPServer:
                     },
                 ),
                 Tool(
+                    name="recall_divergent",
+                    description="Recall memories with divergent associative thinking. Expands memory candidates and selects them through workspace-style competition.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "context": {
+                                "type": "string",
+                                "description": "Current conversation context or topic",
+                            },
+                            "n_results": {
+                                "type": "integer",
+                                "description": "Number of memories to recall",
+                                "default": 5,
+                                "minimum": 1,
+                                "maximum": 20,
+                            },
+                            "max_branches": {
+                                "type": "integer",
+                                "description": "Maximum branches per node during associative expansion",
+                                "default": 3,
+                                "minimum": 1,
+                                "maximum": 8,
+                            },
+                            "max_depth": {
+                                "type": "integer",
+                                "description": "Maximum depth during associative expansion",
+                                "default": 3,
+                                "minimum": 1,
+                                "maximum": 5,
+                            },
+                            "temperature": {
+                                "type": "number",
+                                "description": "Selection temperature (lower is more focused)",
+                                "default": 0.7,
+                                "minimum": 0.1,
+                                "maximum": 2.0,
+                            },
+                            "include_diagnostics": {
+                                "type": "boolean",
+                                "description": "Include diagnostic metrics in the output",
+                                "default": False,
+                            },
+                        },
+                        "required": ["context"],
+                    },
+                ),
+                Tool(
+                    name="get_association_diagnostics",
+                    description="Inspect associative expansion diagnostics for a given context without committing activation updates.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "context": {
+                                "type": "string",
+                                "description": "Context used to probe associative expansion",
+                            },
+                            "sample_size": {
+                                "type": "integer",
+                                "description": "Sample size for diagnostic probing",
+                                "default": 20,
+                                "minimum": 3,
+                                "maximum": 20,
+                            },
+                        },
+                        "required": ["context"],
+                    },
+                ),
+                Tool(
+                    name="consolidate_memories",
+                    description="Run a manual replay/consolidation cycle to strengthen associations and refresh activation metadata.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "window_hours": {
+                                "type": "integer",
+                                "description": "Look-back window for replay candidates in hours",
+                                "default": 24,
+                                "minimum": 1,
+                                "maximum": 168,
+                            },
+                            "max_replay_events": {
+                                "type": "integer",
+                                "description": "Maximum replay transitions to process",
+                                "default": 200,
+                                "minimum": 1,
+                                "maximum": 1000,
+                            },
+                            "link_update_strength": {
+                                "type": "number",
+                                "description": "Strength for coactivation/link updates",
+                                "default": 0.2,
+                                "minimum": 0.01,
+                                "maximum": 1.0,
+                            },
+                        },
+                        "required": [],
+                    },
+                ),
+                Tool(
                     name="get_memory_chain",
                     description="Get a memory and all memories linked to it. Useful for exploring related memories.",
                     inputSchema={
@@ -659,6 +758,74 @@ Date Range:
                                 )
 
                         return [TextContent(type="text", text="\n".join(output_lines))]
+
+                    case "recall_divergent":
+                        context = arguments.get("context", "")
+                        if not context:
+                            return [TextContent(type="text", text="Error: context is required")]
+
+                        results, diagnostics = await self._memory_store.recall_divergent(
+                            context=context,
+                            n_results=arguments.get("n_results", 5),
+                            max_branches=arguments.get("max_branches", 3),
+                            max_depth=arguments.get("max_depth", 3),
+                            temperature=arguments.get("temperature", 0.7),
+                            include_diagnostics=arguments.get("include_diagnostics", False),
+                        )
+
+                        if not results:
+                            return [TextContent(type="text", text="No relevant memories found.")]
+
+                        output_lines = [f"Divergent recall returned {len(results)} memories:\n"]
+                        for i, result in enumerate(results, 1):
+                            m = result.memory
+                            output_lines.append(
+                                f"--- Memory {i} (score: {result.distance:.4f}) ---\n"
+                                f"ID: {m.id}\n"
+                                f"[{m.timestamp}] [{m.emotion}] [{m.category}]\n"
+                                f"{m.content}\n"
+                            )
+
+                        if arguments.get("include_diagnostics", False):
+                            output_lines.append(
+                                "\n=== Diagnostics ===\n"
+                                f"{json.dumps(diagnostics, indent=2, ensure_ascii=False)}"
+                            )
+
+                        return [TextContent(type="text", text="\n".join(output_lines))]
+
+                    case "get_association_diagnostics":
+                        context = arguments.get("context", "")
+                        if not context:
+                            return [TextContent(type="text", text="Error: context is required")]
+
+                        diagnostics = await self._memory_store.get_association_diagnostics(
+                            context=context,
+                            sample_size=arguments.get("sample_size", 20),
+                        )
+
+                        return [
+                            TextContent(
+                                type="text",
+                                text="Association diagnostics:\n"
+                                f"{json.dumps(diagnostics, indent=2, ensure_ascii=False)}",
+                            )
+                        ]
+
+                    case "consolidate_memories":
+                        stats = await self._memory_store.consolidate_memories(
+                            window_hours=arguments.get("window_hours", 24),
+                            max_replay_events=arguments.get("max_replay_events", 200),
+                            link_update_strength=arguments.get("link_update_strength", 0.2),
+                        )
+
+                        return [
+                            TextContent(
+                                type="text",
+                                text="Consolidation completed:\n"
+                                f"{json.dumps(stats, indent=2, ensure_ascii=False)}",
+                            )
+                        ]
 
                     case "get_memory_chain":
                         memory_id = arguments.get("memory_id", "")

@@ -9,7 +9,19 @@ from typing import Any
 
 import chromadb
 
+from .association import (
+    AssociationDiagnostics,
+    AssociationEngine,
+    adaptive_search_params,
+)
 from .config import MemoryConfig
+from .consolidation import ConsolidationEngine
+from .predictive import (
+    PredictiveDiagnostics,
+    calculate_context_relevance,
+    calculate_novelty_score,
+    calculate_prediction_error,
+)
 from .types import (
     CameraPosition,
     Memory,
@@ -18,6 +30,11 @@ from .types import (
     MemoryStats,
     ScoredMemory,
     SensoryData,
+)
+from .workspace import (
+    WorkspaceCandidate,
+    diversity_score,
+    select_workspace_candidates,
 )
 from .working_memory import WorkingMemoryBuffer
 
@@ -166,6 +183,51 @@ def _parse_links(links_json: str) -> tuple[MemoryLink, ...]:
         return ()
 
 
+def _parse_coactivation_weights(coactivation_json: Any) -> tuple[tuple[str, float], ...]:
+    """JSON文字列から共起重みタプルに変換。"""
+    if not coactivation_json:
+        return ()
+
+    if isinstance(coactivation_json, dict):
+        payload = coactivation_json
+    else:
+        try:
+            payload = json.loads(coactivation_json)
+        except (json.JSONDecodeError, TypeError):
+            return ()
+
+    if not isinstance(payload, dict):
+        return ()
+
+    weights: list[tuple[str, float]] = []
+    for memory_id, weight in payload.items():
+        if not isinstance(memory_id, str):
+            continue
+        try:
+            value = float(weight)
+        except (TypeError, ValueError):
+            continue
+        value = max(0.0, min(1.0, value))
+        weights.append((memory_id, value))
+    return tuple(weights)
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    """Best-effort float conversion."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    """Best-effort int conversion."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _memory_from_metadata(
     memory_id: str,
     content: str,
@@ -193,6 +255,12 @@ def _memory_from_metadata(
         tags=_parse_tags(metadata.get("tags", "")),
         # Phase 5: 因果リンク
         links=_parse_links(metadata.get("links", "")),
+        # Phase 6: 発散想起・予測符号化
+        novelty_score=_safe_float(metadata.get("novelty_score", 0.0), 0.0),
+        prediction_error=_safe_float(metadata.get("prediction_error", 0.0), 0.0),
+        activation_count=_safe_int(metadata.get("activation_count", 0), 0),
+        last_activated=metadata.get("last_activated", ""),
+        coactivation_weights=_parse_coactivation_weights(metadata.get("coactivation", "")),
     )
 
 
@@ -207,6 +275,9 @@ class MemoryStore:
         self._lock = asyncio.Lock()
         # Phase 4: 作業記憶バッファ
         self._working_memory = WorkingMemoryBuffer(capacity=20)
+        # Phase 6: 連想・統合エンジン
+        self._association_engine = AssociationEngine()
+        self._consolidation_engine = ConsolidationEngine()
 
     async def connect(self) -> None:
         """Initialize ChromaDB connection (Phase 4: with episodes collection)."""
@@ -1107,3 +1178,266 @@ class MemoryStore:
                 break
 
         return result
+
+    # Phase 6: 発散的想起・統合
+
+    async def update_memory_fields(self, memory_id: str, **fields: Any) -> bool:
+        """記憶メタデータの部分更新."""
+        collection = self._ensure_connected()
+        result = await asyncio.to_thread(collection.get, ids=[memory_id])
+        if not result or not result.get("ids"):
+            return False
+
+        metadata = result["metadatas"][0] if result.get("metadatas") else {}
+        metadata.update(fields)
+        await asyncio.to_thread(collection.update, ids=[memory_id], metadatas=[metadata])
+        return True
+
+    async def record_activation(
+        self,
+        memory_id: str,
+        prediction_error: float | None = None,
+    ) -> bool:
+        """想起時の活性化情報を更新."""
+        memory = await self.get_by_id(memory_id)
+        if memory is None:
+            return False
+
+        payload: dict[str, Any] = {
+            "activation_count": memory.activation_count + 1,
+            "last_activated": datetime.now().isoformat(),
+        }
+        if prediction_error is not None:
+            payload["prediction_error"] = max(0.0, min(1.0, prediction_error))
+
+        return await self.update_memory_fields(memory_id, **payload)
+
+    async def bump_coactivation(
+        self,
+        source_id: str,
+        target_id: str,
+        delta: float = 0.1,
+    ) -> bool:
+        """共起重みを双方向で増加."""
+        source = await self.get_by_id(source_id)
+        target = await self.get_by_id(target_id)
+        if source is None or target is None:
+            return False
+
+        delta = max(0.0, min(1.0, delta))
+
+        updates: list[tuple[str, dict[str, Any]]] = []
+        for left, right_id in ((source, target_id), (target, source_id)):
+            weight_map = {item_id: value for item_id, value in left.coactivation_weights}
+            current = weight_map.get(right_id, 0.0)
+            weight_map[right_id] = max(0.0, min(1.0, current + delta))
+            updates.append(
+                (
+                    left.id,
+                    {
+                        "coactivation": json.dumps(weight_map, ensure_ascii=False),
+                    },
+                )
+            )
+
+        for memory_id, payload in updates:
+            await self.update_memory_fields(memory_id, **payload)
+
+        return True
+
+    async def maybe_add_related_link(
+        self,
+        source_id: str,
+        target_id: str,
+        threshold: float = 0.6,
+    ) -> bool:
+        """共起重みが閾値を超えたとき related リンクを追加."""
+        source = await self.get_by_id(source_id)
+        if source is None:
+            return False
+
+        weight_map = {item_id: value for item_id, value in source.coactivation_weights}
+        if weight_map.get(target_id, 0.0) < threshold:
+            return False
+
+        await self.add_causal_link(
+            source_id=source_id,
+            target_id=target_id,
+            link_type="related",
+            note="auto-linked by consolidation replay",
+        )
+        return True
+
+    async def recall_divergent(
+        self,
+        context: str,
+        n_results: int = 5,
+        max_branches: int = 3,
+        max_depth: int = 3,
+        temperature: float = 0.7,
+        include_diagnostics: bool = False,
+        record_activation: bool = True,
+    ) -> tuple[list[MemorySearchResult], dict[str, Any]]:
+        """連想拡散 + ワークスペース競合で発散想起."""
+        n_results = max(1, min(20, n_results))
+        seed_size = max(3, min(25, n_results * 3))
+        seeds = await self.search_with_scoring(query=context, n_results=seed_size)
+        if not seeds:
+            return [], {}
+
+        branch_limit, depth_limit = adaptive_search_params(
+            context=context,
+            requested_branches=max_branches,
+            requested_depth=max_depth,
+            seed_count=len(seeds),
+        )
+
+        seed_memories = [item.memory for item in seeds]
+        expanded, assoc_diag = await self._association_engine.spread(
+            seeds=seed_memories,
+            fetch_memory_by_id=self.get_by_id,
+            max_branches=branch_limit,
+            max_depth=depth_limit,
+        )
+
+        distance_map = {item.memory.id: item.semantic_distance for item in seeds}
+        all_candidates: dict[str, Memory] = {}
+        for memory in seed_memories + expanded:
+            all_candidates[memory.id] = memory
+
+        workspace_candidates: list[WorkspaceCandidate] = []
+        prediction_errors: list[float] = []
+        novelty_scores: list[float] = []
+
+        for memory in all_candidates.values():
+            semantic_distance = distance_map.get(memory.id)
+            if semantic_distance is None:
+                relevance = calculate_context_relevance(context, memory)
+            else:
+                relevance = 1.0 / (1.0 + max(0.0, semantic_distance))
+
+            prediction_error = calculate_prediction_error(context, memory)
+            novelty = calculate_novelty_score(memory, prediction_error)
+            emotion_boost = calculate_emotion_boost(memory.emotion)
+            normalized_emotion = max(0.0, min(1.0, emotion_boost / 0.4))
+
+            prediction_errors.append(prediction_error)
+            novelty_scores.append(novelty)
+
+            workspace_candidates.append(
+                WorkspaceCandidate(
+                    memory=memory,
+                    relevance=relevance,
+                    novelty=novelty,
+                    prediction_error=prediction_error,
+                    emotion_boost=normalized_emotion,
+                )
+            )
+
+        selected = select_workspace_candidates(
+            candidates=workspace_candidates,
+            max_results=n_results,
+            temperature=temperature,
+        )
+
+        results: list[MemorySearchResult] = []
+        selected_memories: list[Memory] = []
+        for candidate, utility in selected:
+            selected_memories.append(candidate.memory)
+            if record_activation:
+                await self.record_activation(
+                    candidate.memory.id,
+                    prediction_error=candidate.prediction_error,
+                )
+                await self.update_memory_fields(
+                    candidate.memory.id,
+                    novelty_score=candidate.novelty,
+                    prediction_error=candidate.prediction_error,
+                )
+            score_distance = max(0.0, 1.0 - utility)
+            results.append(MemorySearchResult(memory=candidate.memory, distance=score_distance))
+
+        if not include_diagnostics:
+            return results, {}
+
+        diagnostics = self._build_divergent_diagnostics(
+            context=context,
+            association=assoc_diag,
+            selected=selected_memories,
+            prediction_errors=prediction_errors,
+            novelty_scores=novelty_scores,
+            branch_limit=branch_limit,
+            depth_limit=depth_limit,
+        )
+        return results, diagnostics
+
+    async def get_association_diagnostics(
+        self,
+        context: str,
+        sample_size: int = 20,
+    ) -> dict[str, Any]:
+        """連想探索の診断値を返す."""
+        n_results = max(3, min(20, sample_size))
+        _, diagnostics = await self.recall_divergent(
+            context=context,
+            n_results=n_results,
+            max_branches=4,
+            max_depth=3,
+            include_diagnostics=True,
+            record_activation=False,
+        )
+        return diagnostics
+
+    async def consolidate_memories(
+        self,
+        window_hours: int = 24,
+        max_replay_events: int = 200,
+        link_update_strength: float = 0.2,
+    ) -> dict[str, int]:
+        """手動トリガーの統合処理."""
+        stats = await self._consolidation_engine.run(
+            store=self,
+            window_hours=window_hours,
+            max_replay_events=max_replay_events,
+            link_update_strength=link_update_strength,
+        )
+        return stats.to_dict()
+
+    def _build_divergent_diagnostics(
+        self,
+        context: str,
+        association: AssociationDiagnostics,
+        selected: list[Memory],
+        prediction_errors: list[float],
+        novelty_scores: list[float],
+        branch_limit: int,
+        depth_limit: int,
+    ) -> dict[str, Any]:
+        """発散想起の診断情報を構築."""
+        avg_prediction_error = 0.0
+        if prediction_errors:
+            avg_prediction_error = sum(prediction_errors) / len(prediction_errors)
+
+        avg_novelty = 0.0
+        if novelty_scores:
+            avg_novelty = sum(novelty_scores) / len(novelty_scores)
+
+        predictive = PredictiveDiagnostics(
+            avg_prediction_error=avg_prediction_error,
+            avg_novelty=avg_novelty,
+        )
+
+        return {
+            "context": context,
+            "branches_used": association.branches_used,
+            "depth_used": association.depth_used,
+            "adaptive_branch_limit": branch_limit,
+            "adaptive_depth_limit": depth_limit,
+            "traversed_edges": association.traversed_edges,
+            "expanded_nodes": association.expanded_nodes,
+            "avg_branching_factor": association.avg_branching_factor,
+            "selected_count": len(selected),
+            "diversity_score": diversity_score(selected),
+            "avg_prediction_error": predictive.avg_prediction_error,
+            "avg_novelty": predictive.avg_novelty,
+        }

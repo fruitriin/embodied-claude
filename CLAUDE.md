@@ -104,6 +104,7 @@ uv run <server-name>
 | `remember` | content, emotion?, importance?, category? | 記憶保存 |
 | `search_memories` | query, n_results?, filters... | 検索 |
 | `recall` | context, n_results? | 文脈想起 |
+| `recall_divergent` | context, n_results?, max_branches?, max_depth?, temperature?, include_diagnostics? | 発散的想起 |
 | `list_recent_memories` | limit?, category_filter? | 最近一覧 |
 | `get_memory_stats` | なし | 統計情報 |
 | `recall_with_associations` | context, n_results?, chain_depth? | 関連記憶も含めて想起 |
@@ -116,6 +117,8 @@ uv run <server-name>
 | `recall_by_camera_position` | pan_angle, tilt_angle, tolerance? | カメラ角度で想起 |
 | `get_working_memory` | n_results? | 作業記憶を取得 |
 | `refresh_working_memory` | なし | 作業記憶を更新 |
+| `consolidate_memories` | window_hours?, max_replay_events?, link_update_strength? | 手動の再生・統合 |
+| `get_association_diagnostics` | context, sample_size? | 連想探索の診断情報 |
 | `link_memories` | source_id, target_id, link_type?, note? | 記憶をリンク |
 | `get_causal_chain` | memory_id, direction?, max_depth? | 因果チェーン取得 |
 
