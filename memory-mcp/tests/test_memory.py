@@ -288,7 +288,7 @@ class TestAutoLinking:
     async def test_get_linked_memories(self, memory_store: MemoryStore):
         """Test retrieving linked memories."""
         # Save and link memories manually
-        mem1 = await memory_store.save(content="記憶1")
+        await memory_store.save(content="記憶1")
         mem2 = await memory_store.save_with_auto_link(
             content="記憶1に関連する記憶2",
             link_threshold=2.0,  # Very generous

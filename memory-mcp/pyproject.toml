@@ -28,11 +28,12 @@ memory-mcp = "memory_mcp.server:main"
 packages = ["src/memory_mcp"]
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
+per-file-ignores = {"src/memory_mcp/server.py" = ["E501"]}
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

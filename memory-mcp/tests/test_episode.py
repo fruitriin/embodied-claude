@@ -1,12 +1,11 @@
 """Tests for EpisodeManager."""
 
+
 import pytest
-from datetime import datetime, timezone
 
 from src.memory_mcp.config import MemoryConfig
 from src.memory_mcp.episode import EpisodeManager
 from src.memory_mcp.memory import MemoryStore
-from src.memory_mcp.types import Episode
 
 
 @pytest.fixture

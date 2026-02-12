@@ -1,9 +1,9 @@
 """Tests for SensoryIntegration."""
 
-import pytest
-import tempfile
 import shutil
-from pathlib import Path
+import tempfile
+
+import pytest
 
 from src.memory_mcp.config import MemoryConfig
 from src.memory_mcp.memory import MemoryStore
@@ -242,17 +242,17 @@ class TestCameraPositionRecall:
         camera_pos = CameraPosition(pan_angle=60, tilt_angle=-30)
 
         # Save 3 memories (with small time gaps)
-        mem1 = await sensory_integration.save_visual_memory(
+        await sensory_integration.save_visual_memory(
             content="First",
             image_path="/tmp/1.jpg",
             camera_position=camera_pos,
         )
-        mem2 = await sensory_integration.save_visual_memory(
+        await sensory_integration.save_visual_memory(
             content="Second",
             image_path="/tmp/2.jpg",
             camera_position=camera_pos,
         )
-        mem3 = await sensory_integration.save_visual_memory(
+        await sensory_integration.save_visual_memory(
             content="Third",
             image_path="/tmp/3.jpg",
             camera_position=camera_pos,

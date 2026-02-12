@@ -1,7 +1,8 @@
 """Tests for WorkingMemoryBuffer."""
 
-import pytest
 from datetime import datetime, timezone
+
+import pytest
 
 from src.memory_mcp.types import Memory
 from src.memory_mcp.working_memory import WorkingMemoryBuffer

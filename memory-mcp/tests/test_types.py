@@ -1,6 +1,5 @@
 """Tests for Phase 4 type definitions."""
 
-import pytest
 from datetime import datetime, timezone
 
 from src.memory_mcp.types import (

@@ -31,12 +31,12 @@ from .types import (
     ScoredMemory,
     SensoryData,
 )
+from .working_memory import WorkingMemoryBuffer
 from .workspace import (
     WorkspaceCandidate,
     diversity_score,
     select_workspace_candidates,
 )
-from .working_memory import WorkingMemoryBuffer
 
 # 感情ブーストマップ: 強い感情は記憶に残りやすい
 EMOTION_BOOST_MAP: dict[str, float] = {

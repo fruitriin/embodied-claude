@@ -1,6 +1,6 @@
 # Embodied Claude - プロジェクト指示
 
-このプロジェクトは、Claude に身体（目・首・耳・脳）を与える MCP サーバー群です。
+このプロジェクトは、Claude に身体（目・首・耳・声・脳）を与える MCP サーバー群です。
 
 ## ディレクトリ構造
 
@@ -45,14 +45,27 @@ embodied-claude/
 - **非同期**: asyncio ベース
 
 ```bash
-# 依存関係インストール
-uv sync
+# 依存関係インストール（dev含む）
+uv sync --extra dev
+
+# リント
+uv run ruff check .
 
 # テスト実行
 uv run pytest
 
 # サーバー起動
 uv run <server-name>
+```
+
+### コミット前のチェック（必須）
+
+各サブプロジェクトで以下を実行してからコミットすること:
+
+```bash
+cd <project-dir>
+uv run ruff check .    # lint エラーがないこと
+uv run pytest -v       # テストが通ること
 ```
 
 ## MCP ツール一覧
@@ -150,7 +163,7 @@ uv run <server-name>
 
 1. Tapo アプリでローカルアカウントを作成（TP-Link アカウントではない）
 2. カメラの IP アドレスを固定推奨
-3. ファームウェアによって認証方式が異なる（Simple / Secure）
+3. カメラ制御は ONVIF プロトコル（業界標準）を使用
 
 ### セキュリティ
 
@@ -178,9 +191,32 @@ ffplay rtsp://username:password@192.168.1.xxx:554/stream1
 cd wifi_cam_mcp && uv run wifi-cam-mcp
 ```
 
+## 外出時の構成
+
+モバイルバッテリー + スマホテザリング + Tailscale VPN で外出散歩が可能。
+
+```
+[Tapoカメラ(肩)] ──WiFi──▶ [スマホ(テザリング)]
+                                    │
+                              Tailscale VPN
+                                    │
+                            [自宅WSL2(Claude Code)]
+                                    │
+                            [claude-code-webui]
+                                    │
+                            [スマホブラウザ] ◀── 操作
+```
+
+- 電源: 大容量モバイルバッテリー（40,000mAh推奨）+ USB-C PD→DC 9V変換ケーブル
+- ネットワーク: スマホテザリング + Tailscale VPN
+- 操作: claude-code-webui（スマホブラウザから）
+
 ## 関連リンク
 
 - [MCP Protocol](https://modelcontextprotocol.io/)
-- [pytapo](https://github.com/JurajNyiri/pytapo) - Tapo カメラ制御ライブラリ
+- [go2rtc](https://github.com/AlexxIT/go2rtc) - RTSPストリーム中継・オーディオバックチャンネル
+- [claude-code-webui](https://github.com/sugyan/claude-code-webui) - Claude Code の Web UI
+- [Tailscale](https://tailscale.com/) - メッシュ VPN
 - [ChromaDB](https://www.trychroma.com/) - ベクトルデータベース
 - [OpenAI Whisper](https://github.com/openai/whisper) - 音声認識
+- [ElevenLabs](https://elevenlabs.io/) - 音声合成 API

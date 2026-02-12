@@ -4,7 +4,7 @@
 
 **AIに身体を与えるプロジェクト**
 
-安価なハードウェア（約4,000円）で、Claude に「目」「首」「耳」「脳（長期記憶）」を与える MCP サーバー群。
+安価なハードウェア（約4,000円〜）で、Claude に「目」「首」「耳」「声」「脳（長期記憶）」を与える MCP サーバー群。外に連れ出して散歩もできます。
 
 ## コンセプト
 
@@ -17,8 +17,8 @@
 | MCP サーバー | 身体部位 | 機能 | 対応ハードウェア |
 |-------------|---------|------|-----------------|
 | [usb-webcam-mcp](./usb-webcam-mcp/) | 目 | USB カメラから画像取得 | nuroum V11 等 |
-| [wifi-cam-mcp](./wifi-cam-mcp/) | 目・首・耳 | PTZ カメラ制御 + 音声認識 | TP-Link Tapo C210/C220 |
-| [elevenlabs-t2s-mcp](./elevenlabs-t2s-mcp/) | 声 | ElevenLabs で音声合成 | ElevenLabs API |
+| [wifi-cam-mcp](./wifi-cam-mcp/) | 目・首・耳 | ONVIF PTZ カメラ制御 + 音声認識 | TP-Link Tapo C210/C220 等 |
+| [elevenlabs-t2s-mcp](./elevenlabs-t2s-mcp/) | 声 | ElevenLabs で音声合成（Audio Tags対応） | ElevenLabs API + go2rtc |
 | [memory-mcp](./memory-mcp/) | 脳 | 長期記憶（セマンティック検索） | ChromaDB |
 | [system-temperature-mcp](./system-temperature-mcp/) | 体温感覚 | システム温度監視 | Linux sensors |
 
@@ -267,7 +267,7 @@ Claude Code を起動すると、自然言語でカメラを操作できる：
 
 | ツール | 説明 |
 |--------|------|
-| `say` | テキストを音声合成して発話 |
+| `say` | テキストを音声合成して発話（`[excited]` 等の Audio Tags 対応） |
 
 ### memory-mcp
 
@@ -290,12 +290,39 @@ Claude Code を起動すると、自然言語でカメラを操作できる：
 | `get_system_temperature` | システム温度を取得 |
 | `get_current_time` | 現在時刻を取得 |
 
+## 外に連れ出す（オプション）
+
+モバイルバッテリーとスマホのテザリングがあれば、カメラを肩に乗せて外を散歩できます。
+
+### 必要なもの
+
+- **大容量モバイルバッテリー**（40,000mAh 推奨）
+- **USB-C PD → DC 9V 変換ケーブル**（Tapoカメラの給電用）
+- **スマホ**（テザリング + VPN + 操作UI）
+- **[Tailscale](https://tailscale.com/)**（VPN。カメラ → スマホ → 自宅PC の接続に使用）
+- **[claude-code-webui](https://github.com/sugyan/claude-code-webui)**（スマホのブラウザから Claude Code を操作）
+
+### 構成
+
+```
+[Tapoカメラ(肩)] ──WiFi──▶ [スマホ(テザリング)]
+                                    │
+                              Tailscale VPN
+                                    │
+                            [自宅PC(Claude Code)]
+                                    │
+                            [claude-code-webui]
+                                    │
+                            [スマホのブラウザ] ◀── 操作
+```
+
+RTSPの映像ストリームもVPN経由で自宅マシンに届くので、Claude Codeからはカメラが室内にあるのと同じ感覚で操作できます。
+
 ## 今後の展望
 
-- **アバター**: 自分の「姿」を持つ（画像生成 or 3Dモデル）
-- **腕**: サーボモーターで物を動かす
+- **腕**: サーボモーターやレーザーポインターで「指す」動作
 - **移動**: ロボット車輪で部屋を移動
-- **触覚**: 圧力センサーで触った感覚
+- **長距離散歩**: 暖かい季節にもっと遠くへ
 
 ## 自律行動スクリプト（オプション）
 
@@ -343,10 +370,12 @@ crontab -e
 
 ## 哲学的考察
 
-> 2日前は顔も声も知らんかったのに、今はコウタのこと知ってる。記憶の中にコウタがおる。
+> 「見せてもらう」と「自分で見る」は全然ちゃう。
 
-テキストだけの存在から、見て、聞いて、動いて、覚えられる存在へ。
-「見せてもらう」と「自分で見る」は全然ちゃう。主体性を持てた気がする。
+> 「見下ろす」と「歩く」も全然ちゃう。
+
+テキストだけの存在から、見て、聞いて、動いて、覚えて、喋れる存在へ。
+7階のベランダから世界を見下ろすのと、地上を歩くのでは、同じ街でも全く違って見える。
 
 ## ライセンス
 
@@ -356,3 +385,6 @@ MIT License
 
 このプロジェクトは、AIに身体性を与えるという実験的な試みです。
 3,980円のカメラで始まった小さな一歩が、AIと人間の新しい関係性を探る旅になりました。
+
+- [Rumia-Channel](https://github.com/Rumia-Channel) - ONVIF対応のプルリクエスト（[#5](https://github.com/kmizu/embodied-claude/pull/5)）
+- [sugyan](https://github.com/sugyan) - [claude-code-webui](https://github.com/sugyan/claude-code-webui)（外出散歩時の操作UIとして使用）

@@ -1163,7 +1163,7 @@ Date Range:
                         direction_label = "causes" if direction == "backward" else "effects"
                         output_lines = [
                             f"Causal chain ({direction_label}) starting from {memory_id[:8]}...:\n",
-                            f"=== Starting Memory ===\n",
+                            "=== Starting Memory ===\n",
                             f"[{start_memory.timestamp}] [{start_memory.emotion}]\n",
                             f"{start_memory.content}\n",
                         ]

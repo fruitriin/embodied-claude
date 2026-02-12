@@ -38,6 +38,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
+per-file-ignores = {"src/wifi_cam_mcp/server.py" = ["E501"]}
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
