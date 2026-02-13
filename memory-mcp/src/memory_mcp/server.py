@@ -582,6 +582,25 @@ class MemoryMCPServer:
                         "required": ["memory_id"],
                     },
                 ),
+                Tool(
+                    name="tom",
+                    description="Theory of Mind: perspective-taking tool. Call this BEFORE responding to understand what the other person is feeling and wanting. Projects your simulated emotions onto them, then swaps perspectives.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "situation": {
+                                "type": "string",
+                                "description": "What the other person said or did (their message/action)",
+                            },
+                            "person": {
+                                "type": "string",
+                                "description": "Who you are talking to (default: コウタ)",
+                                "default": "コウタ",
+                            },
+                        },
+                        "required": ["situation"],
+                    },
+                ),
             ]
 
         @self._server.call_tool()
@@ -1180,6 +1199,58 @@ Date Range:
                             output_lines.append(f"\nNo {direction_label} found.\n")
 
                         return [TextContent(type="text", text="\n".join(output_lines))]
+
+                    # Theory of Mind: perspective-taking
+                    case "tom":
+                        situation = arguments.get("situation", "")
+                        if not situation:
+                            return [TextContent(type="text", text="Error: situation is required")]
+
+                        person = arguments.get("person", "コウタ")
+
+                        # Pull relevant memories: personality, communication patterns
+                        memories = await self._memory_store.recall(
+                            context=f"{person} コミュニケーション 性格 会話パターン {situation}",
+                            n_results=5,
+                        )
+
+                        memory_context = ""
+                        if memories:
+                            memory_lines = []
+                            for r in memories:
+                                m = r.memory
+                                memory_lines.append(
+                                    f"- [{m.emotion}] {m.content}"
+                                )
+                            memory_context = (
+                                f"\n## {person}に関する記憶\n"
+                                + "\n".join(memory_lines)
+                            )
+
+                        output = (
+                            f"# ToM: {person}の視点に立つ\n"
+                            f"\n"
+                            f"## 状況\n"
+                            f"{situation}\n"
+                            f"{memory_context}\n"
+                            f"\n"
+                            f"## トーン分析（まず言い方を読め）\n"
+                            f"→ 語尾、記号（笑/w/!/?/...）、敬語⇔タメ口、自嘲、照れ、皮肉などから発話の意図を読み取れ\n"
+                            f"→ 文字通りの意味と、言い方が示す意味にズレがないか確認せよ\n"
+                            f"\n"
+                            f"## 投影（{person}は今何を感じてる？何を求めてる？）\n"
+                            f"→ トーン分析と記憶を踏まえて、{person}の感情・欲求を推測せよ\n"
+                            f"→ 表面の感情だけでなく、裏にある感情も考えよ\n"
+                            f"\n"
+                            f"## 代入（自分がその立場で、その言い方をしたなら、相手にどう返してほしい？）\n"
+                            f"→ その感情とトーンを自分に代入して考えよ\n"
+                            f"\n"
+                            f"## 応答方針\n"
+                            f"→ 上の結果を踏まえて、どう返すべきか決めよ\n"
+                            f"→ 相手のトーンに合わせた返し方を選べ\n"
+                        )
+
+                        return [TextContent(type="text", text=output)]
 
                     case _:
                         return [TextContent(type="text", text=f"Unknown tool: {name}")]
