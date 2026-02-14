@@ -1,73 +1,163 @@
-# Embodied Claude - プロジェクト指示
+# CLAUDE.md
 
-このプロジェクトは、Claude に身体（目・首・耳・声・脳）を与える MCP サーバー群です。
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## ディレクトリ構造
+## プロジェクト概要
 
-```
-embodied-claude/
-├── usb-webcam-mcp/        # USB ウェブカメラ制御（Python）
-│   └── src/usb_webcam_mcp/
-│       └── server.py      # MCP サーバー実装
-│
-├── wifi_cam_mcp/          # Wi-Fi PTZ カメラ制御（Python）
-│   ├── server.py          # MCP サーバー実装
-│   ├── camera.py          # Tapo カメラ制御
-│   └── config.py          # 設定管理
-│
-├── elevenlabs-t2s-mcp/     # ElevenLabs TTS（Python）
-│   └── src/elevenlabs_t2s_mcp/
-│       └── server.py       # MCP サーバー実装
-│
-├── memory-mcp/            # 長期記憶システム（Python）
-│   └── src/memory_mcp/
-│       ├── server.py      # MCP サーバー実装
-│       ├── memory.py      # メモリストア操作
-│       ├── postgres_store.py # PostgreSQL バックエンド
-│       ├── types.py       # 型定義（Emotion, Category）
-│       └── config.py      # 設定管理
-│
-├── system-temperature-mcp/ # 体温感覚（Python）
-│   └── src/system_temperature_mcp/
-│       └── server.py      # 温度センサー読み取り
-│
-└── .claude/               # Claude Code ローカル設定
-    └── settings.local.json
-```
+Claude に身体（目・首・耳・声・脳）を与える MCP サーバー群。各サーバーは独立した Python パッケージとして構成される。
 
-## 開発ガイドライン
+## 開発コマンド
 
-### Python プロジェクト共通
-
-- **パッケージマネージャー**: uv
-- **Python バージョン**: 3.10+
-- **テストフレームワーク**: pytest + pytest-asyncio
-- **リンター**: ruff
-- **非同期**: asyncio ベース
+すべてのサブプロジェクトで共通：
 
 ```bash
 # 依存関係インストール（dev含む）
+cd <project-dir>
 uv sync --extra dev
 
 # リント
 uv run ruff check .
 
 # テスト実行
-uv run pytest
+uv run pytest -v
+
+# 単一テスト実行
+uv run pytest tests/test_memory.py -v
+uv run pytest tests/test_memory.py::test_save_and_search -v
 
 # サーバー起動
-uv run <server-name>
+uv run <entry-point>
 ```
 
-### コミット前のチェック（必須）
+### エントリーポイント
 
-各サブプロジェクトで以下を実行してからコミットすること:
+| プロジェクト | コマンド | エントリーポイント |
+|------------|---------|------------------|
+| wifi-cam-mcp | `uv run wifi-cam-mcp` | `wifi_cam_mcp.server:main` |
+| memory-mcp | `uv run memory-mcp` | `memory_mcp.server:main` |
+| memory-mcp | `uv run memory-migrate` | `memory_mcp.migrate:main`（ChromaDB→PostgreSQL移行） |
+| elevenlabs-t2s-mcp | `uv run elevenlabs-t2s` | `elevenlabs_t2s_mcp.server:main` |
+| usb-webcam-mcp | `uv run usb-webcam-mcp` | `usb_webcam_mcp.server:main` |
+| system-temperature-mcp | `uv run system-temperature-mcp` | `system_temperature_mcp.server:main` |
+| installer | `uv run embodied-claude-installer` | `installer.main:main`（PyQt6 GUI） |
+
+### コミット前チェック（必須）
+
+変更した各サブプロジェクトで実行：
 
 ```bash
 cd <project-dir>
 uv run ruff check .    # lint エラーがないこと
 uv run pytest -v       # テストが通ること
 ```
+
+### Ruff 設定の違い
+
+- **memory-mcp**: `line-length = 120`（server.py が複雑なため）
+- **wifi-cam-mcp**: `line-length = 100`、server.py は E501 除外
+- **他プロジェクト**: 各 pyproject.toml を参照
+- **共通**: `select = ["E", "F", "I", "N", "W"]`、`target-version = "py310"`
+
+## アーキテクチャ
+
+### MCP サーバー共通パターン
+
+すべてのサーバーは `mcp.server.Server`（FastMCP ではない）を使用し、同じ構造に従う：
+
+```python
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+
+class XxxMCPServer:
+    def __init__(self):
+        self._server = Server("server-name")
+        self._setup_handlers()
+
+    def _setup_handlers(self) -> None:
+        @self._server.list_tools()
+        async def list_tools() -> list[Tool]: ...
+
+        @self._server.call_tool()
+        async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageContent]: ...
+
+    async def run(self) -> None:
+        async with stdio_server() as (read, write):
+            await self._server.run(read, write, ...)
+```
+
+例外: `usb-webcam-mcp` のみ関数ベース（クラスなし）。
+
+### Config パターン
+
+各サーバーの設定は `frozen dataclass` + `from_env()` で環境変数から生成：
+
+```python
+@dataclass(frozen=True)
+class XxxConfig:
+    @classmethod
+    def from_env(cls) -> "XxxConfig":
+        load_dotenv()
+        return cls(field=os.getenv("ENV_VAR", "default"), ...)
+```
+
+### サブプロジェクト間の関係
+
+```
+Claude Code ──MCP stdio──▶ 各サーバー（独立プロセス）
+                              │
+                              ├── wifi-cam-mcp ──ONVIF──▶ Tapoカメラ
+                              │                  ──RTSP──▶ ffmpeg（キャプチャ/録音）
+                              │                  ──Whisper──▶ 音声認識
+                              │
+                              ├── memory-mcp ──────────▶ PostgreSQL（pgvector + pgroonga）
+                              │                          SentenceTransformer（埋め込み）
+                              │
+                              ├── elevenlabs-t2s-mcp ──▶ ElevenLabs API
+                              │                    ──▶ go2rtc（オーディオバックチャネル）
+                              │
+                              ├── usb-webcam-mcp ──▶ OpenCV
+                              └── system-temperature-mcp ──▶ OS sensors
+```
+
+### memory-mcp の内部構造
+
+最も複雑なサブプロジェクト。Phase 1〜6 で段階的に構築された記憶システム：
+
+- `postgres_store.py`: PostgreSQL コネクション管理（asyncpg）
+- `schema.py`: DDL定義（memories, episodes, memory_links, coactivation_weights テーブル）
+- `memory.py`: MemoryStore クラス（保存・検索・想起のメインロジック）
+- `embeddings.py`: SentenceTransformer or API ベースの埋め込み生成
+- `types.py`: Memory, Episode, MemoryLink, Emotion(Enum), Category(Enum) 等のデータ型
+- `episode.py`: エピソード管理
+- `working_memory.py`: 作業記憶バッファ
+- `association.py` / `workspace.py` / `predictive.py`: 発散的想起・予測符号化
+
+### wifi-cam-mcp のステレオビジョン
+
+`TAPO_RIGHT_CAMERA_HOST` を設定すると、右目カメラが有効化され `see_right`, `see_both`, `both_eyes_*` 等のツールが追加される。`config.py` の `CameraConfig` でカメラごとの設定を管理。
+
+## 環境変数
+
+各サブプロジェクトの `.env.example` を参照。主要なもの：
+
+- **wifi-cam-mcp**: `TAPO_CAMERA_HOST`, `TAPO_USERNAME`, `TAPO_PASSWORD`, `TAPO_ONVIF_PORT`（デフォルト2020）, `TAPO_MOUNT_MODE`（normal|ceiling）
+- **memory-mcp**: `MEMORY_PG_DSN`（PostgreSQL接続文字列）, `MEMORY_EMBEDDING_MODEL`（デフォルト: intfloat/multilingual-e5-base）
+- **elevenlabs-t2s-mcp**: `ELEVENLABS_API_KEY`, `GO2RTC_URL`, `GO2RTC_STREAM`
+- **Docker Compose**: `memory-mcp/docker/` に PostgreSQL + pgvector のセットアップあり
+
+## テスト
+
+テストが充実しているのは **memory-mcp** と **elevenlabs-t2s-mcp**。wifi-cam-mcp は物理カメラが必要なためテストなし。
+
+```bash
+# memory-mcp（PostgreSQL接続が必要）
+cd memory-mcp && uv run pytest -v
+
+# elevenlabs-t2s-mcp
+cd elevenlabs-t2s-mcp && uv run pytest -v
+```
+
+pytest 設定: `asyncio_mode = "auto"`（pyproject.toml に定義済み）
 
 ## MCP ツール一覧
 
@@ -93,20 +183,14 @@ uv run pytest -v       # テストが通ること
 | `camera_go_to_preset` | preset_id | プリセット移動 |
 | `listen` | duration (1-30秒), transcribe? | 音声録音 |
 
-#### wifi_cam_mcp（ステレオ視覚/右目がある場合）
+#### ステレオ視覚（右目がある場合のみ）
 
 | ツール | パラメータ | 説明 |
 |--------|-----------|------|
 | `see_right` | なし | 右目で撮影 |
 | `see_both` | なし | 左右同時撮影 |
-| `right_eye_look_left` | degrees (1-90, default: 30) | 右目を左へ |
-| `right_eye_look_right` | degrees (1-90, default: 30) | 右目を右へ |
-| `right_eye_look_up` | degrees (1-90, default: 20) | 右目を上へ |
-| `right_eye_look_down` | degrees (1-90, default: 20) | 右目を下へ |
-| `both_eyes_look_left` | degrees (1-90, default: 30) | 両目を左へ |
-| `both_eyes_look_right` | degrees (1-90, default: 30) | 両目を右へ |
-| `both_eyes_look_up` | degrees (1-90, default: 20) | 両目を上へ |
-| `both_eyes_look_down` | degrees (1-90, default: 20) | 両目を下へ |
+| `right_eye_look_*` | degrees | 右目の個別制御 |
+| `both_eyes_look_*` | degrees | 両目の同時制御 |
 | `get_eye_positions` | なし | 両目の角度を取得 |
 | `align_eyes` | なし | 右目を左目に合わせる |
 | `reset_eye_positions` | なし | 角度追跡をリセット |
@@ -175,20 +259,14 @@ uv run pytest -v       # テストが通ること
 
 ## デバッグ
 
-### カメラ接続確認
-
 ```bash
-# USB カメラ
+# USB カメラ確認
 v4l2-ctl --list-devices
 
-squash Wi-Fi カメラ（RTSP ストリーム確認）
+# Wi-Fi カメラ（RTSP ストリーム確認）
 ffplay rtsp://username:password@192.168.1.xxx:554/stream1
-```
 
-### MCP サーバーログ
-
-```bash
-# 直接起動してログ確認
+# MCP サーバーログ（直接起動）
 cd wifi_cam_mcp && uv run wifi-cam-mcp
 ```
 
@@ -201,16 +279,12 @@ cd wifi_cam_mcp && uv run wifi-cam-mcp
                                     │
                               Tailscale VPN
                                     │
-                            [自宅WSL2(Claude Code)]
+                            [自宅PC(Claude Code)]
                                     │
                             [claude-code-webui]
                                     │
                             [スマホブラウザ] ◀── 操作
 ```
-
-- 電源: 大容量モバイルバッテリー（40,000mAh推奨）+ USB-C PD→DC 9V変換ケーブル
-- ネットワーク: スマホテザリング + Tailscale VPN
-- 操作: claude-code-webui（スマホブラウザから）
 
 ## 関連リンク
 
