@@ -1260,18 +1260,17 @@ Date Range:
                 return [TextContent(type="text", text=f"Error: {e!s}")]
 
     async def connect_memory(self) -> None:
-        """Connect to memory store (Phase 4: with episode manager & sensory integration)."""
+        """Connect to memory store (PostgreSQL backend)."""
         config = MemoryConfig.from_env()
         self._memory_store = MemoryStore(config)
         await self._memory_store.connect()
-        logger.info(f"Connected to memory store at {config.db_path}")
+        logger.info(f"Connected to memory store (PostgreSQL: {config.pg_dsn})")
 
-        # Phase 4.2: Initialize episode manager
-        episodes_collection = self._memory_store.get_episodes_collection()
-        self._episode_manager = EpisodeManager(self._memory_store, episodes_collection)
+        # Initialize episode manager
+        self._episode_manager = EpisodeManager(self._memory_store)
         logger.info("Episode manager initialized")
 
-        # Phase 4.3: Initialize sensory integration
+        # Initialize sensory integration
         self._sensory_integration = SensoryIntegration(self._memory_store)
         logger.info("Sensory integration initialized")
 
