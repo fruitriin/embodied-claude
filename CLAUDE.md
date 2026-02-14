@@ -22,7 +22,8 @@ embodied-claude/
 ├── memory-mcp/            # 長期記憶システム（Python）
 │   └── src/memory_mcp/
 │       ├── server.py      # MCP サーバー実装
-│       ├── memory.py      # ChromaDB 操作
+│       ├── memory.py      # メモリストア操作
+│       ├── postgres_store.py # PostgreSQL バックエンド
 │       ├── types.py       # 型定義（Emotion, Category）
 │       └── config.py      # 設定管理
 │
@@ -170,7 +171,7 @@ uv run pytest -v       # テストが通ること
 - `.env` ファイルはコミットしない（.gitignore に追加済み）
 - カメラパスワードは環境変数で管理
 - ElevenLabs API キーは環境変数で管理
-- 長期記憶は `~/.claude/memories/` に保存される
+- 長期記憶は PostgreSQL に保存される（接続情報は環境変数 `MEMORY_PG_DSN` で管理）
 
 ## デバッグ
 
@@ -217,6 +218,6 @@ cd wifi_cam_mcp && uv run wifi-cam-mcp
 - [go2rtc](https://github.com/AlexxIT/go2rtc) - RTSPストリーム中継・オーディオバックチャンネル
 - [claude-code-webui](https://github.com/sugyan/claude-code-webui) - Claude Code の Web UI
 - [Tailscale](https://tailscale.com/) - メッシュ VPN
-- [ChromaDB](https://www.trychroma.com/) - ベクトルデータベース
+- [PostgreSQL](https://www.postgresql.org/) + [pgvector](https://github.com/pgvector/pgvector) + [pgroonga](https://pgroonga.github.io/) - ベクトル検索・日本語全文検索
 - [OpenAI Whisper](https://github.com/openai/whisper) - 音声認識
 - [ElevenLabs](https://elevenlabs.io/) - 音声合成 API
