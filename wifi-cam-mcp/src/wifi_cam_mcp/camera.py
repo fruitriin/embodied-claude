@@ -4,6 +4,7 @@ import asyncio
 import base64
 import io
 import logging
+import re
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -163,6 +164,13 @@ class TapoCamera:
             adjust_time=True,
         )
         await self._cam.update_xaddrs()
+
+        # When using SSH tunnel, rewrite xaddrs to go through localhost
+        if self._config.host in ("localhost", "127.0.0.1"):
+            for key, url in self._cam.xaddrs.items():
+                self._cam.xaddrs[key] = re.sub(
+                    r"http://[\d.]+:(\d+)", r"http://localhost:\1", url
+                )
 
         # Create services
         self._media_service = await self._cam.create_media_service()
