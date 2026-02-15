@@ -37,6 +37,7 @@ uv run <entry-point>
 | memory-mcp | `uv run memory-mcp` | `memory_mcp.server:main` |
 | memory-mcp | `uv run memory-migrate` | `memory_mcp.migrate:main`（ChromaDB→PostgreSQL移行） |
 | elevenlabs-t2s-mcp | `uv run elevenlabs-t2s` | `elevenlabs_t2s_mcp.server:main` |
+| voicevox-mcp | `uv run voicevox-mcp` | `voicevox_mcp.server:main` |
 | usb-webcam-mcp | `uv run usb-webcam-mcp` | `usb_webcam_mcp.server:main` |
 | system-temperature-mcp | `uv run system-temperature-mcp` | `system_temperature_mcp.server:main` |
 | installer | `uv run embodied-claude-installer` | `installer.main:main`（PyQt6 GUI） |
@@ -55,6 +56,7 @@ uv run pytest -v       # テストが通ること
 
 - **memory-mcp**: `line-length = 120`（server.py が複雑なため）
 - **wifi-cam-mcp**: `line-length = 100`、server.py は E501 除外
+- **voicevox-mcp**: `line-length = 100`、server.py は E501 除外
 - **他プロジェクト**: 各 pyproject.toml を参照
 - **共通**: `select = ["E", "F", "I", "N", "W"]`、`target-version = "py310"`
 
@@ -115,6 +117,9 @@ Claude Code ──MCP stdio──▶ 各サーバー（独立プロセス）
                               ├── elevenlabs-t2s-mcp ──▶ ElevenLabs API
                               │                    ──▶ go2rtc（オーディオバックチャネル）
                               │
+                              ├── voicevox-mcp ──────▶ VOICEVOX Engine（ローカルTTS）
+                              │                  ──▶ go2rtc（オーディオバックチャネル）
+                              │
                               ├── usb-webcam-mcp ──▶ OpenCV
                               └── system-temperature-mcp ──▶ OS sensors
 ```
@@ -143,11 +148,12 @@ Claude Code ──MCP stdio──▶ 各サーバー（独立プロセス）
 - **wifi-cam-mcp**: `TAPO_CAMERA_HOST`, `TAPO_USERNAME`, `TAPO_PASSWORD`, `TAPO_ONVIF_PORT`（デフォルト2020）, `TAPO_MOUNT_MODE`（normal|ceiling）
 - **memory-mcp**: `MEMORY_PG_DSN`（PostgreSQL接続文字列）, `MEMORY_EMBEDDING_MODEL`（デフォルト: intfloat/multilingual-e5-base）
 - **elevenlabs-t2s-mcp**: `ELEVENLABS_API_KEY`, `GO2RTC_URL`, `GO2RTC_STREAM`
+- **voicevox-mcp**: `VOICEVOX_URL`（デフォルト: http://127.0.0.1:50021）, `VOICEVOX_SPEAKER_ID`（デフォルト: 1=ずんだもん）
 - **Docker Compose**: `memory-mcp/docker/` に PostgreSQL + pgvector のセットアップあり
 
 ## テスト
 
-テストが充実しているのは **memory-mcp** と **elevenlabs-t2s-mcp**。wifi-cam-mcp は物理カメラが必要なためテストなし。
+テストが充実しているのは **memory-mcp**、**elevenlabs-t2s-mcp**、**voicevox-mcp**。wifi-cam-mcp は物理カメラが必要なためテストなし。
 
 ```bash
 # memory-mcp（PostgreSQL接続が必要）
@@ -155,6 +161,9 @@ cd memory-mcp && uv run pytest -v
 
 # elevenlabs-t2s-mcp
 cd elevenlabs-t2s-mcp && uv run pytest -v
+
+# voicevox-mcp
+cd voicevox-mcp && uv run pytest -v
 ```
 
 pytest 設定: `asyncio_mode = "auto"`（pyproject.toml に定義済み）
@@ -223,11 +232,18 @@ pytest 設定: `asyncio_mode = "auto"`（pyproject.toml に定義済み）
 **Emotion**: happy, sad, surprised, moved, excited, nostalgic, curious, neutral
 **Category**: daily, philosophical, technical, memory, observation, feeling, conversation
 
-### elevenlabs-t2s（声）
+### elevenlabs-t2s（声 - クラウド）
 
 | ツール | パラメータ | 説明 |
 |--------|-----------|------|
 | `say` | text, voice_id?, model_id?, output_format?, play_audio? | ElevenLabsで音声合成して発話 |
+
+### voicevox-mcp（声 - ローカル）
+
+| ツール | パラメータ | 説明 |
+|--------|-----------|------|
+| `say` | text, speaker_id?, speed_scale?, pitch_scale?, intonation_scale?, volume_scale?, play_audio?, speaker? | VOICEVOXで音声合成して発話 |
+| `list_speakers` | なし | 利用可能な話者一覧 |
 
 ### system-temperature-mcp（体温感覚）
 
