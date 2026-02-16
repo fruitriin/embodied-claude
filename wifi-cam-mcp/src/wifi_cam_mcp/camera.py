@@ -329,15 +329,15 @@ class TapoCamera:
     async def _capture_via_rtsp(self) -> bytes:
         """Capture a frame via RTSP using ffmpeg (fallback).
 
-        Tries sub stream (stream2, low quality) first for low-bandwidth
-        environments, then falls back to main stream (stream1).
+        Tries main stream (stream1, high quality) first, then falls back
+        to sub stream (stream2) for low-bandwidth environments.
         """
-        # Try sub stream first (lower bandwidth requirement)
+        # Try main stream first (higher quality)
         try:
-            return await self._capture_rtsp_stream(self._get_rtsp_url(sub_stream=True))
+            return await self._capture_rtsp_stream(self._get_rtsp_url(sub_stream=False))
         except Exception as e:
-            logger.info("Sub stream (stream2) failed: %s, trying main stream", e)
-        return await self._capture_rtsp_stream(self._get_rtsp_url(sub_stream=False))
+            logger.info("Main stream (stream1) failed: %s, trying sub stream", e)
+        return await self._capture_rtsp_stream(self._get_rtsp_url(sub_stream=True))
 
     async def _capture_rtsp_stream(self, rtsp_url: str) -> bytes:
         """Capture a single frame from an RTSP stream."""
