@@ -264,11 +264,19 @@ class TapoCamera:
     async def _capture_image_impl(self, save_to_file: bool) -> CaptureResult:
         """Internal capture implementation."""
         # Try ONVIF snapshot first
-        image_data = await self._try_onvif_snapshot()
+        onvif_error = None
+        image_data = None
+        try:
+            image_data = await self._try_onvif_snapshot()
+        except Exception as e:
+            onvif_error = str(e)
 
         # Fall back to RTSP if ONVIF snapshot fails
         if image_data is None:
-            logger.info("ONVIF snapshot unavailable, falling back to RTSP capture")
+            logger.info(
+                "ONVIF snapshot unavailable (reason: %s), falling back to RTSP capture",
+                onvif_error or "empty response",
+            )
             image_data = await self._capture_via_rtsp()
 
         # Process image
@@ -319,8 +327,20 @@ class TapoCamera:
         return None
 
     async def _capture_via_rtsp(self) -> bytes:
-        """Capture a frame via RTSP using ffmpeg (fallback)."""
-        rtsp_url = self._get_rtsp_url()
+        """Capture a frame via RTSP using ffmpeg (fallback).
+
+        Tries sub stream (stream2, low quality) first for low-bandwidth
+        environments, then falls back to main stream (stream1).
+        """
+        # Try sub stream first (lower bandwidth requirement)
+        try:
+            return await self._capture_rtsp_stream(self._get_rtsp_url(sub_stream=True))
+        except Exception as e:
+            logger.info("Sub stream (stream2) failed: %s, trying main stream", e)
+        return await self._capture_rtsp_stream(self._get_rtsp_url(sub_stream=False))
+
+    async def _capture_rtsp_stream(self, rtsp_url: str) -> bytes:
+        """Capture a single frame from an RTSP stream."""
 
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp_path = tmp.name
@@ -343,22 +363,40 @@ class TapoCamera:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
             )
-            await asyncio.wait_for(process.wait(), timeout=10.0)
+            try:
+                _, stderr_data = await asyncio.wait_for(
+                    process.communicate(), timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                raise RuntimeError("RTSP capture timed out after 10s")
+
+            if process.returncode != 0:
+                stderr_msg = stderr_data.decode(errors="replace").strip()[-500:]
+                raise RuntimeError(
+                    f"ffmpeg RTSP capture failed (rc={process.returncode}): {stderr_msg}"
+                )
 
             with open(tmp_path, "rb") as f:
                 return f.read()
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 
-    def _get_rtsp_url(self) -> str:
-        """Get RTSP stream URL."""
+    def _get_rtsp_url(self, sub_stream: bool = False) -> str:
+        """Get RTSP stream URL.
+
+        Args:
+            sub_stream: If True, use low-quality sub stream (stream2)
+                        for low-bandwidth environments.
+        """
         if self._config.stream_url:
             return self._config.stream_url
+        stream = "stream2" if sub_stream else "stream1"
         return (
             f"rtsp://{self._config.username}:{self._config.password}"
-            f"@{self._config.host}:554/stream1"
+            f"@{self._config.host}:554/{stream}"
         )
 
     # ------------------------------------------------------------------

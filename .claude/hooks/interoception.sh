@@ -41,7 +41,6 @@ try:
         f\"arousal={now.get('arousal', '?')}%({ar_arrow})\",
         f\"thermal={now.get('thermal', '?')}\",
         f\"mem_free={now.get('mem_free', '?')}%({mem_arrow})\",
-        f\"location={now.get('location', '?')}\",
         f\"uptime={now.get('uptime_min', '?')}min\",
         f\"heartbeats={len(window)}\",
     ]
