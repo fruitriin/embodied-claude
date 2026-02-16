@@ -43,29 +43,6 @@ fi
 # --- 体温 ---
 THERMAL=$(sysctl -n machdep.xcpm.cpu_thermal_level 2>/dev/null || echo "0")
 
-# --- 位置（30秒に1回だけ更新、キャッシュ利用） ---
-LOCATION_CACHE="/tmp/interoception_location.cache"
-LOCATION_TTL=30
-LOCATION_CITY="?"
-LOCATION_REGION="?"
-
-if [ -f "$LOCATION_CACHE" ]; then
-    CACHE_AGE=$(( $(date +%s) - $(stat -f %m "$LOCATION_CACHE" 2>/dev/null || echo 0) ))
-    if [ "$CACHE_AGE" -lt "$LOCATION_TTL" ]; then
-        LOCATION_CITY=$(sed -n '1p' "$LOCATION_CACHE")
-        LOCATION_REGION=$(sed -n '2p' "$LOCATION_CACHE")
-    fi
-fi
-
-if [ "$LOCATION_CITY" = "?" ]; then
-    GEO_JSON=$(curl -s --max-time 2 ipinfo.io 2>/dev/null || echo "{}")
-    LOCATION_CITY=$(echo "$GEO_JSON" | grep '"city"' | head -1 | sed 's/.*: "//;s/".*//' | tr -d ',')
-    LOCATION_REGION=$(echo "$GEO_JSON" | grep '"region"' | head -1 | sed 's/.*: "//;s/".*//' | tr -d ',')
-    if [ -n "$LOCATION_CITY" ] && [ "$LOCATION_CITY" != "?" ]; then
-        printf '%s\n%s\n' "$LOCATION_CITY" "$LOCATION_REGION" > "$LOCATION_CACHE"
-    fi
-fi
-
 # --- 稼働時間（分） ---
 BOOT_TIME=$(sysctl -n kern.boottime 2>/dev/null | awk '{print $4}' | tr -d ',')
 if [ -n "$BOOT_TIME" ]; then
@@ -126,7 +103,6 @@ result = {
         'arousal': ${AROUSAL},
         'thermal': ${THERMAL:-0},
         'mem_free': ${MEM_PRESSURE:-0},
-        'location': '${LOCATION_CITY:-?}, ${LOCATION_REGION:-?}',
         'uptime_min': ${UPTIME_MIN}
     },
     'window': window,

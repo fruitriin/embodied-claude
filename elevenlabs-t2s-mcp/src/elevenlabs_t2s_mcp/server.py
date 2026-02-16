@@ -255,6 +255,26 @@ def _play_audio(
     playback = (playback or "auto").strip().lower()
     last_error: str | None = None
 
+    if playback in {"auto", "afplay"}:
+        afplay = shutil.which("afplay")
+        if afplay:
+            result = subprocess.run(
+                [afplay, file_path],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return "played via afplay"
+            error = result.stderr.strip() or result.stdout.strip()
+            last_error = f"afplay failed: {error}"
+            if playback == "afplay":
+                return last_error
+        else:
+            last_error = "afplay not available"
+            if playback == "afplay":
+                return last_error
+
     if playback in {"auto", "paplay"}:
         ok, message = _play_with_paplay(file_path, pulse_sink, pulse_server)
         if ok:
