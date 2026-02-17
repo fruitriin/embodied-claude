@@ -28,15 +28,23 @@ try:
     ar_arrow = arrows.get(trend.get('arousal', 'stable'), '→')
     mem_arrow = arrows.get(trend.get('mem_free', 'stable'), '→')
 
-    # タイムスタンプから時刻部分だけ
+    # タイムスタンプから時刻・曜日
+    from datetime import datetime
     ts = now.get('ts', '?')
     if 'T' in ts:
         time_part = ts.split('T')[1][:8]
+        try:
+            dt = datetime.strptime(ts[:10], '%Y-%m-%d')
+            dow = dt.strftime('%a')  # Mon, Tue, ...
+        except Exception:
+            dow = '?'
     else:
         time_part = ts
+        dow = '?'
 
     parts = [
         f\"time={time_part}\",
+        f\"day={dow}\",
         f\"phase={now.get('phase', '?')}\",
         f\"arousal={now.get('arousal', '?')}%({ar_arrow})\",
         f\"thermal={now.get('thermal', '?')}\",
