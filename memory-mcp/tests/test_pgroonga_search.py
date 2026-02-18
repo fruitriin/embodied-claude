@@ -1,11 +1,10 @@
-"""Tests for pgroonga full-text search: okurigana normalization and fuzzy search.
+"""Tests for search quality: semantic search (pgvector), notation normalization
+(pgroonga), fuzzy search, and scoring behavior.
 
-These tests verify that the pgroonga indexes correctly handle Japanese
-notation variations (表記ゆれ) using TokenMecab with reading-based
-tokenization and NormalizerNFKC150 normalization.
-
-Requires a running PostgreSQL instance with pgroonga extension.
+Requires a running PostgreSQL instance with pgvector + pgroonga extensions.
 """
+
+import uuid
 
 import pytest
 
@@ -217,3 +216,268 @@ class TestHybridSearchIntegration:
 
         contents = [r.memory.content for r in results]
         assert any("ONVIF" in c for c in contents)
+
+
+class TestSemanticSearch:
+    """Tests for pgvector semantic search (keyword overlap = zero).
+
+    These tests verify that vector similarity (multilingual-e5-base) finds
+    conceptually related memories even when the query and content share
+    no common keywords. Uses the pure vector search() method.
+    """
+
+    @pytest.mark.asyncio
+    async def test_food_concept_no_keyword_overlap(self, memory_store: MemoryStore):
+        """「夕飯の記録」→「ラーメン屋で味噌ラーメンを食べた」。
+
+        クエリに「ラーメン」も「食べ」も含まれないが、
+        「夕飯」と「ラーメンを食べた」は意味的に近い。
+        """
+        await memory_store.save(content="ラーメン屋で味噌ラーメンを食べた")
+        await memory_store.save(content="Gitのブランチ戦略について議論した")
+        await memory_store.save(content="部屋の掃除をした")
+
+        results = await memory_store.search("夕飯の記録", n_results=3)
+
+        contents = [r.memory.content for r in results]
+        assert contents[0] == "ラーメン屋で味噌ラーメンを食べた", (
+            f"Expected ramen memory as top result for '夕飯の記録', got: {contents}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_learning_concept_no_keyword_overlap(self, memory_store: MemoryStore):
+        """「最近の技術的な学び」→「asyncioのコルーチンについて理解が深まった」。
+
+        クエリに「asyncio」も「コルーチン」も「理解」も含まれないが、
+        技術学習という概念で結びつく。
+        """
+        await memory_store.save(content="asyncioのコルーチンについて理解が深まった")
+        await memory_store.save(content="公園のベンチで休憩した")
+        await memory_store.save(content="洗濯物を干した")
+
+        results = await memory_store.search("最近の技術的な学び", n_results=3)
+
+        contents = [r.memory.content for r in results]
+        assert contents[0] == "asyncioのコルーチンについて理解が深まった", (
+            f"Expected asyncio memory as top result for '最近の技術的な学び', got: {contents}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_weather_concept_no_keyword_overlap(self, memory_store: MemoryStore):
+        """「天候の変化」→「朝から雨が降り続いていた」。
+
+        クエリに「雨」も「降り」も含まれないが、
+        天候という概念で結びつく。
+        """
+        await memory_store.save(content="朝から雨が降り続いていた")
+        await memory_store.save(content="新しいAPIエンドポイントを実装した")
+        await memory_store.save(content="友達にメッセージを送った")
+
+        results = await memory_store.search("天候の変化", n_results=3)
+
+        contents = [r.memory.content for r in results]
+        assert contents[0] == "朝から雨が降り続いていた", (
+            f"Expected rain memory as top result for '天候の変化', got: {contents}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_emotion_concept_no_keyword_overlap(self, memory_store: MemoryStore):
+        """「嬉しかった体験」→「試験に合格した」。
+
+        クエリに「試験」も「合格」も含まれないが、
+        嬉しい体験という概念で結びつく。
+        """
+        await memory_store.save(content="試験に合格した")
+        await memory_store.save(content="データベースのインデックスを再構築した")
+        await memory_store.save(content="ゴミを出した")
+
+        results = await memory_store.search("嬉しかった体験", n_results=3)
+
+        contents = [r.memory.content for r in results]
+        assert contents[0] == "試験に合格した", (
+            f"Expected exam memory as top result for '嬉しかった体験', got: {contents}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_semantic_search_with_many_distractors(self, memory_store: MemoryStore):
+        """20件のノイズの中からターゲットをトップ3で返せる。"""
+        distractors = [
+            "洗濯物を干した",
+            "ゴミを出した",
+            "電気代の請求書を確認した",
+            "歯医者の予約をした",
+            "スーパーで牛乳を買った",
+            "Gitのコンフリクトを解消した",
+            "CIパイプラインを修正した",
+            "Dockerイメージをビルドした",
+            "会議の議事録を書いた",
+            "上司にメールを送った",
+            "通勤電車で本を読んだ",
+            "部屋の模様替えをした",
+            "新しいキーボードを注文した",
+            "プリンターのインクを交換した",
+            "Wi-Fiルーターを再起動した",
+            "植物に水をやった",
+            "写真を整理した",
+            "古い服を処分した",
+            "友達の誕生日プレゼントを選んだ",
+            "保険の更新手続きをした",
+        ]
+        for d in distractors:
+            await memory_store.save(content=d)
+
+        await memory_store.save(content="カメラのパンチルト制御をONVIFで実装した")
+
+        results = await memory_store.search("カメラの機能開発", n_results=3)
+
+        contents = [r.memory.content for r in results]
+        assert any("パンチルト" in c for c in contents), (
+            f"Expected camera memory in top 3 among 21 memories, got: {contents}"
+        )
+
+
+class TestScoringBehavior:
+    """Tests for search_with_scoring: importance, emotion, and time decay.
+
+    Verifies that the scoring formula correctly prioritizes memories
+    based on the memory module's design intent:
+    - Higher importance → lower final_score (ranked higher)
+    - Stronger emotion → lower final_score (ranked higher)
+    - Fresher memory → lower final_score (ranked higher)
+
+    final_score = semantic_distance + (1 - time_decay) * 0.3
+                  - (emotion_boost * 0.2 + importance_boost * 0.2)
+    """
+
+    @pytest.mark.asyncio
+    async def test_importance_boost_affects_ranking(self, memory_store: MemoryStore):
+        """同じトピックで重要度が異なる → 重要度が高い方が上位。"""
+        await memory_store.save(
+            content="カメラの設定を変更した",
+            importance=1, emotion="neutral",
+        )
+        await memory_store.save(
+            content="カメラの初期セットアップを完了した",
+            importance=5, emotion="neutral",
+        )
+
+        results = await memory_store.search_with_scoring(
+            query="カメラの設定",
+            n_results=2,
+            use_time_decay=False,
+            use_emotion_boost=False,
+        )
+
+        assert len(results) == 2
+        # importance=5 の方が importance_boost が大きく、final_score が低い
+        assert results[0].memory.importance >= results[1].memory.importance, (
+            f"Expected importance=5 first, got: "
+            f"[{results[0].memory.importance}] '{results[0].memory.content}', "
+            f"[{results[1].memory.importance}] '{results[1].memory.content}'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_emotion_boost_affects_ranking(self, memory_store: MemoryStore):
+        """同じトピックで感情が異なる → 強い感情の方が上位。"""
+        await memory_store.save(
+            content="散歩で公園に行った",
+            importance=3, emotion="neutral",
+        )
+        await memory_store.save(
+            content="散歩で美しい夕焼けを見た",
+            importance=3, emotion="excited",
+        )
+
+        results = await memory_store.search_with_scoring(
+            query="散歩の思い出",
+            n_results=2,
+            use_time_decay=False,
+            use_emotion_boost=True,
+        )
+
+        assert len(results) == 2
+        # excited (0.4) > neutral (0.0) なので excited が上位
+        assert results[0].emotion_boost >= results[1].emotion_boost, (
+            f"Expected excited memory first, got: "
+            f"[{results[0].memory.emotion}] '{results[0].memory.content}', "
+            f"[{results[1].memory.emotion}] '{results[1].memory.content}'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_time_decay_affects_ranking(self, memory_store: MemoryStore):
+        """同じトピックで鮮度が異なる → 新しい方が上位。
+
+        created_at を直接 UPDATE して30日前に戻し、time_decay の効果を検証。
+        """
+        old_mem = await memory_store.save(
+            content="カメラのファームウェアを更新した",
+            importance=3, emotion="neutral",
+        )
+        await memory_store.save(
+            content="カメラのレンズを掃除した",
+            importance=3, emotion="neutral",
+        )
+
+        # old_mem を30日前に戻す
+        pool = memory_store._store._pool
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE memories SET created_at = created_at - INTERVAL '30 days' WHERE id = $1",
+                uuid.UUID(old_mem.id),
+            )
+
+        results = await memory_store.search_with_scoring(
+            query="カメラのメンテナンス",
+            n_results=2,
+            use_time_decay=True,
+            use_emotion_boost=False,
+        )
+
+        assert len(results) == 2
+        # 新しい記憶の time_decay が 1.0 に近く、古い記憶は減衰している
+        assert results[0].time_decay_factor > results[1].time_decay_factor, (
+            f"Expected fresh memory first, got: "
+            f"decay=[{results[0].time_decay_factor:.3f}] '{results[0].memory.content}', "
+            f"decay=[{results[1].time_decay_factor:.3f}] '{results[1].memory.content}'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_combined_scoring_importance_over_distance(self, memory_store: MemoryStore):
+        """重要度5 + excited はセマンティック距離の僅差を逆転できる。
+
+        意味的にやや遠いが重要度が高い記憶が、意味的に近いが平凡な記憶より
+        上位に来ることを確認。
+        """
+        # 意味的に近いが重要度低
+        await memory_store.save(
+            content="カメラの角度を微調整した",
+            importance=1, emotion="neutral",
+        )
+        # 意味的にやや遠いが重要度+感情が高い
+        await memory_store.save(
+            content="新しいPTZカメラを購入してセットアップに成功した",
+            importance=5, emotion="excited",
+        )
+
+        results = await memory_store.search_with_scoring(
+            query="カメラの調整",
+            n_results=2,
+            use_time_decay=False,
+            use_emotion_boost=True,
+        )
+
+        assert len(results) == 2
+        # importance=5 + excited の合計ブースト: (0.4*0.2 + 0.4*0.2) = 0.16
+        # importance=1 + neutral の合計ブースト: (0.0*0.2 + 0.0*0.2) = 0.0
+        # 0.16の差がセマンティック距離の僅差を逆転できるか
+        high_importance_result = next(
+            r for r in results if r.memory.importance == 5
+        )
+        low_importance_result = next(
+            r for r in results if r.memory.importance == 1
+        )
+        assert high_importance_result.final_score <= low_importance_result.final_score, (
+            f"Expected high-importance memory to have lower (better) final_score: "
+            f"imp5={high_importance_result.final_score:.4f} vs "
+            f"imp1={low_importance_result.final_score:.4f}"
+        )
