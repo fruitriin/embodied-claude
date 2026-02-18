@@ -46,3 +46,6 @@ per-file-ignores = {"src/memory_mcp/server.py" = ["E501"]}
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "postgres: Requires PostgreSQL backend (pgvector + pgroonga)",
+]

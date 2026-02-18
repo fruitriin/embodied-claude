@@ -26,7 +26,41 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
-      - name: Run tests
+      - name: Run unit tests
+        run: uv run pytest -v -m "not postgres"
+
+      - name: Build test services
+        working-directory: memory-mcp/docker
+        run: docker compose -f docker-compose.test.yml build --build-arg INSTALL_NEOLOGD=false
+
+      - name: Start test services
+        working-directory: memory-mcp/docker
+        run: docker compose -f docker-compose.test.yml up -d
+
+      - name: Wait for PostgreSQL
+        run: |
+          for i in $(seq 1 30); do
+            docker exec embodied-claude-test-db pg_isready -U memory_mcp -d embodied_claude_test && exit 0
+            echo "Waiting for PostgreSQL... ($i/30)"
+            sleep 2
+          done
+          echo "PostgreSQL did not become ready in time"
+          docker logs embodied-claude-test-db
+          exit 1
+
+      - name: Wait for Embedding API
+        run: |
+          for i in $(seq 1 60); do
+            EMBED_PORT=$(docker port embodied-claude-test-embedding 8100 | head -1 | cut -d: -f2)
+            curl -sf "http://localhost:${EMBED_PORT}/health" && exit 0
+            echo "Waiting for Embedding API... ($i/60)"
+            sleep 5
+          done
+          echo "Embedding API did not become ready in time"
+          docker logs embodied-claude-test-embedding
+          exit 1
+
+      - name: Run all tests (including integration)
         run: uv run pytest -v
 
   test-tts-mcp:
