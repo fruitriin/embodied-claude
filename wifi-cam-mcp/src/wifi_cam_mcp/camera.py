@@ -687,22 +687,43 @@ class TapoCamera:
             raise RuntimeError(f"Failed to record audio: {e!s}") from e
 
     async def _transcribe_audio(self, audio_path: str) -> str | None:
-        """Transcribe audio file using OpenAI Whisper.
+        """Transcribe audio using the best available Whisper backend.
 
-        Args:
-            audio_path: Path to the audio file
-
-        Returns:
-            Transcribed text or None if transcription fails
+        Priority:
+          1. mlx-whisper  — Apple Silicon (Metal GPU) optimized
+          2. openai-whisper — NVIDIA CUDA or CPU fallback
         """
+        # --- Backend 1: mlx-whisper (Apple Silicon) ---
+        try:
+            import mlx_whisper
+
+            result = await asyncio.to_thread(
+                mlx_whisper.transcribe,
+                audio_path,
+                path_or_hf_repo="mlx-community/whisper-large-v3-turbo",
+                language="ja",
+            )
+            return result.get("text", "").strip()
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning("mlx-whisper failed, trying openai-whisper: %s", e)
+
+        # --- Backend 2: openai-whisper (CUDA / CPU) ---
         try:
             import whisper
         except ImportError:
-            return "[Whisper not installed. Run: pip install openai-whisper]"
+            return (
+                "[Whisper not installed. "
+                "Mac: pip install mlx-whisper / "
+                "NVIDIA: pip install openai-whisper]"
+            )
 
         try:
             model = await asyncio.to_thread(whisper.load_model, "base")
-            result = await asyncio.to_thread(model.transcribe, audio_path, language="ja")
+            result = await asyncio.to_thread(
+                model.transcribe, audio_path, language="ja",
+            )
             return result.get("text", "").strip()
         except Exception as e:
             return f"[Transcription failed: {e!s}]"
