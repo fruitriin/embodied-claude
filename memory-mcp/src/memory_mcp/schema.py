@@ -83,10 +83,38 @@ CREATE INDEX IF NOT EXISTS idx_memories_embedding ON memories
     USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 200);
 
--- pgroonga full-text search (MeCab tokenizer + NFKC normalization)
+-- pgroonga full-text search: primary index (reading-based + normalization)
+-- unify_kana is intentionally omitted — it converts katakana to hiragana before
+-- MeCab tokenization, breaking dictionary lookup on katakana loanwords
+-- (e.g. "テクノロジー" → "てくのろじー" → MeCab splits into broken tokens).
+-- This index supports fuzzy search via pgroonga_condition(fuzzy_max_distance_ratio).
 CREATE INDEX IF NOT EXISTS idx_memories_content_pgroonga ON memories
     USING pgroonga (content)
-    WITH (tokenizer='TokenMecab', normalizer='NormalizerNFKC150');
+    WITH (
+        tokenizer='TokenMecab("use_reading", true)',
+        normalizer='NormalizerNFKC150(
+            "unify_kana_case", true,
+            "unify_kana_voiced_sound_mark", true,
+            "unify_katakana_v_sounds", true,
+            "unify_hyphen_and_prolonged_sound_mark", true
+        )'
+    );
+
+-- pgroonga full-text search: kana-unified index (hiragana ↔ katakana normalization)
+-- unify_kana enables matching across hiragana/katakana (e.g. "たのしい" → "楽しい").
+-- Cannot be used with fuzzy search (unify_kana breaks MeCab tokenization of katakana).
+CREATE INDEX IF NOT EXISTS idx_memories_content_kana ON memories
+    USING pgroonga (content)
+    WITH (
+        tokenizer='TokenMecab("use_reading", true)',
+        normalizer='NormalizerNFKC150(
+            "unify_kana", true,
+            "unify_kana_case", true,
+            "unify_kana_voiced_sound_mark", true,
+            "unify_katakana_v_sounds", true,
+            "unify_hyphen_and_prolonged_sound_mark", true
+        )'
+    );
 
 -- Metadata filters
 CREATE INDEX IF NOT EXISTS idx_memories_emotion ON memories (emotion);

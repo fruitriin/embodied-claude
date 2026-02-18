@@ -432,6 +432,60 @@ class PostgresStore:
             for r in rows
         ]
 
+    # ── Fuzzy full-text search ──
+    #
+    # Uses pgroonga_condition(fuzzy_max_distance_ratio) for edit-distance-based
+    # approximate matching. Operates on the primary pgroonga index
+    # (idx_memories_content_pgroonga) which does NOT use unify_kana, so MeCab
+    # tokenization stays intact for katakana loanwords.
+    #
+    # Potential uses (not yet integrated):
+    # - Fallback when hybrid_search returns few results due to typos in query
+    # - Association discovery: find memories with similar but not identical terms
+    #   (e.g. "テノクロジー" ≈ "テクノロジー") to suggest new memory links
+    # - Robustness against OCR/ASR transcription errors in saved memories
+
+    async def fuzzy_search(
+        self,
+        query: str,
+        n_results: int = 5,
+        fuzzy_max_distance_ratio: float = 0.34,
+    ) -> list[MemorySearchResult]:
+        """Fuzzy full-text search using pgroonga edit-distance matching.
+
+        Finds memories whose content approximately matches the query, tolerating
+        typos and minor transcription errors. Uses the primary pgroonga index
+        (idx_memories_content_pgroonga) with fuzzy_max_distance_ratio.
+
+        A ratio of 0.34 allows ~1 typo per 3 characters (recommended default).
+        A ratio of 0.2 is stricter (~1 typo per 5 characters).
+        """
+        pool = self._ensure_pool()
+
+        sql = """
+            SELECT m.*,
+                   pgroonga_score(m.tableoid, m.ctid) AS fuzzy_score
+            FROM memories m
+            WHERE content &@~ pgroonga_condition(
+                $1,
+                index_name => 'idx_memories_content_pgroonga',
+                fuzzy_max_distance_ratio => $3
+            )
+            ORDER BY fuzzy_score DESC
+            LIMIT $2
+        """
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, query, n_results, fuzzy_max_distance_ratio)
+
+        return [
+            MemorySearchResult(
+                memory=_row_to_memory(r),
+                distance=1.0 / (1.0 + float(r["fuzzy_score"])) if r["fuzzy_score"] else 1.0,
+            )
+            for r in rows
+        ]
+
     # ── List recent ──
 
     async def list_recent(
