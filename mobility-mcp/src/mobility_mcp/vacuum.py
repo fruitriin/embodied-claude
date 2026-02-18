@@ -7,7 +7,7 @@ import logging
 
 import tinytuya
 
-from .config import DIRECTION_DP, TuyaDeviceConfig
+from .config import DIRECTION_DP, TuyaCloudConfig
 
 logger = logging.getLogger(__name__)
 
@@ -28,36 +28,36 @@ VALID_DIRECTIONS = {
 
 
 class VacuumMobilityController:
-    """Controls a Tuya robot vacuum for AI mobility."""
+    """Controls a Tuya robot vacuum for AI mobility via Cloud API."""
 
-    def __init__(self, config: TuyaDeviceConfig):
+    def __init__(self, config: TuyaCloudConfig):
         self._config = config
-        self._device: tinytuya.Device | None = None
+        self._cloud: tinytuya.Cloud | None = None
 
-    def _ensure_device(self) -> tinytuya.Device:
-        """Get or create device connection."""
-        if self._device is None:
-            self._device = tinytuya.Device(
-                dev_id=self._config.device_id,
-                address=self._config.ip_address,
-                local_key=self._config.local_key,
-                version=self._config.version,
+    def _ensure_cloud(self) -> tinytuya.Cloud:
+        """Get or create cloud connection."""
+        if self._cloud is None:
+            self._cloud = tinytuya.Cloud(
+                apiRegion=self._config.api_region,
+                apiKey=self._config.api_key,
+                apiSecret=self._config.api_secret,
+                apiDeviceID=self._config.device_id,
             )
-            self._device.set_socketPersistent(True)
-            logger.info(
-                "Connected to Tuya device %s at %s",
-                self._config.device_id,
-                self._config.ip_address,
-            )
-        return self._device
+            logger.info("Connected to Tuya Cloud for device %s", self._config.device_id)
+        return self._cloud
 
     async def _send_direction(self, direction: str) -> dict:
-        """Send a direction command to the vacuum."""
+        """Send a direction command to the vacuum via Cloud API."""
         if direction not in VALID_DIRECTIONS:
-            raise ValueError(f"Invalid direction: {direction}. Must be one of {VALID_DIRECTIONS}")
+            raise ValueError(
+                f"Invalid direction: {direction}. Must be one of {VALID_DIRECTIONS}"
+            )
 
-        device = self._ensure_device()
-        result = await asyncio.to_thread(device.set_value, DIRECTION_DP, direction)
+        cloud = self._ensure_cloud()
+        commands = {"commands": [{"code": "direction_control", "value": direction}]}
+        result = await asyncio.to_thread(
+            cloud.sendcommand, self._config.device_id, commands
+        )
         logger.info("Sent direction command: %s -> %s", direction, result)
         return result if isinstance(result, dict) else {}
 
@@ -104,17 +104,12 @@ class VacuumMobilityController:
 
     async def get_status(self) -> dict:
         """Get current device status."""
-        device = self._ensure_device()
-        status = await asyncio.to_thread(device.status)
+        cloud = self._ensure_cloud()
+        status = await asyncio.to_thread(cloud.getstatus, self._config.device_id)
         logger.info("Device status: %s", status)
         return status if isinstance(status, dict) else {}
 
     def disconnect(self) -> None:
-        """Close device connection."""
-        if self._device is not None:
-            try:
-                self._device.close()
-            except Exception:
-                pass
-            self._device = None
-            logger.info("Disconnected from Tuya device")
+        """Close cloud connection."""
+        self._cloud = None
+        logger.info("Disconnected from Tuya Cloud")

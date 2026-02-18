@@ -8,7 +8,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from .config import MAX_MOVE_DURATION, TuyaDeviceConfig
+from .config import MAX_MOVE_DURATION, TuyaCloudConfig
 from .vacuum import VacuumMobilityController
 
 logging.basicConfig(level=logging.INFO)
@@ -37,7 +37,7 @@ class MobilityMCPServer:
     def _ensure_controller(self) -> VacuumMobilityController:
         """Get or create the vacuum controller."""
         if self._controller is None:
-            config = TuyaDeviceConfig.from_env()
+            config = TuyaCloudConfig.from_env()
             self._controller = VacuumMobilityController(config)
         return self._controller
 

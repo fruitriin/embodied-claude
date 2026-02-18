@@ -9,41 +9,41 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-class TuyaDeviceConfig:
-    """Configuration for a Tuya device connection."""
+class TuyaCloudConfig:
+    """Configuration for Tuya Cloud API connection."""
 
     def __init__(
         self,
         device_id: str,
-        ip_address: str,
-        local_key: str,
-        version: str = "3.3",
+        api_key: str,
+        api_secret: str,
+        api_region: str = "cn",
     ):
         self.device_id = device_id
-        self.ip_address = ip_address
-        self.local_key = local_key
-        self.version = version
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.api_region = api_region
 
     @classmethod
-    def from_env(cls) -> TuyaDeviceConfig:
+    def from_env(cls) -> TuyaCloudConfig:
         """Create config from environment variables."""
         device_id = os.getenv("TUYA_DEVICE_ID", "")
-        ip_address = os.getenv("TUYA_IP_ADDRESS", "")
-        local_key = os.getenv("TUYA_LOCAL_KEY", "")
-        version = os.getenv("TUYA_VERSION", "3.3")
+        api_key = os.getenv("TUYA_API_KEY", "")
+        api_secret = os.getenv("TUYA_API_SECRET", "")
+        api_region = os.getenv("TUYA_API_REGION", "cn")
 
         if not device_id:
             raise ValueError("TUYA_DEVICE_ID environment variable is required")
-        if not ip_address:
-            raise ValueError("TUYA_IP_ADDRESS environment variable is required")
-        if not local_key:
-            raise ValueError("TUYA_LOCAL_KEY environment variable is required")
+        if not api_key:
+            raise ValueError("TUYA_API_KEY environment variable is required")
+        if not api_secret:
+            raise ValueError("TUYA_API_SECRET environment variable is required")
 
         return cls(
             device_id=device_id,
-            ip_address=ip_address,
-            local_key=local_key,
-            version=version,
+            api_key=api_key,
+            api_secret=api_secret,
+            api_region=api_region,
         )
 
 
