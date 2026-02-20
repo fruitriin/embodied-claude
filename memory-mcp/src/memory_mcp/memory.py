@@ -1436,7 +1436,7 @@ class MemoryStore:
         seed_memories = [item.memory for item in seeds]
         expanded, assoc_diag = await self._association_engine.spread(
             seeds=seed_memories,
-            fetch_memory_by_id=self.get_by_id,
+            fetch_memories_by_ids=self.get_by_ids,
             max_branches=branch_limit,
             max_depth=depth_limit,
         )

@@ -48,40 +48,45 @@ class AssociationEngine:
     async def spread(
         self,
         seeds: list[Memory],
-        fetch_memory_by_id: Callable[[str], Awaitable[Memory | None]],
+        fetch_memories_by_ids: Callable[[list[str]], Awaitable[list[Memory]]],
         max_branches: int,
         max_depth: int,
     ) -> tuple[list[Memory], AssociationDiagnostics]:
-        """Expand associative neighborhood from seed memories."""
+        """Expand associative neighborhood from seed memories.
+
+        Uses batch fetching per depth level (N+1 → depth×1 DB calls).
+        """
         if not seeds:
             return [], AssociationDiagnostics(max_branches, max_depth, 0, 0, 0.0)
 
         visited: set[str] = {m.id for m in seeds}
-        frontier: list[tuple[Memory, int]] = [(m, 0) for m in seeds]
+        current_level: list[Memory] = list(seeds)
         expanded: list[Memory] = []
         traversed_edges = 0
         branching_counts: list[int] = []
 
-        while frontier:
-            current, depth = frontier.pop(0)
-            if depth >= max_depth:
-                continue
+        for _depth in range(max_depth):
+            if not current_level:
+                break
 
-            neighbors = self._neighbor_candidates(current)
-            neighbors = neighbors[:max_branches]
-            branching_counts.append(len(neighbors))
+            # 現在レベルの全メモリから未訪問の隣接IDを収集
+            frontier_ids: list[str] = []
+            for memory in current_level:
+                neighbors = self._neighbor_candidates(memory)[:max_branches]
+                branching_counts.append(len(neighbors))
+                for neighbor_id in neighbors:
+                    traversed_edges += 1
+                    if neighbor_id not in visited:
+                        frontier_ids.append(neighbor_id)
+                        visited.add(neighbor_id)  # 重複取得防止
 
-            for neighbor_id in neighbors:
-                traversed_edges += 1
-                if neighbor_id in visited:
-                    continue
-                neighbor = await fetch_memory_by_id(neighbor_id)
-                if neighbor is None:
-                    continue
+            if not frontier_ids:
+                break
 
-                visited.add(neighbor_id)
-                expanded.append(neighbor)
-                frontier.append((neighbor, depth + 1))
+            # 深さ1レベル分をバッチで一括取得（N+1 → 1回）
+            fetched = await fetch_memories_by_ids(frontier_ids)
+            expanded.extend(fetched)
+            current_level = fetched
 
         avg_branch = 0.0
         if branching_counts:
