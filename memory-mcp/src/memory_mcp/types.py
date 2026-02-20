@@ -224,6 +224,8 @@ class Memory:
     def to_metadata(self) -> dict[str, Any]:
         """Convert to dictionary for ChromaDB metadata."""
         metadata: dict[str, Any] = {
+            # Phase 8: 元テキストをメタデータに保存（ChromaDB document は正規化済みテキスト）
+            "content": self.content,
             "timestamp": self.timestamp,
             "emotion": self.emotion,
             "importance": self.importance,
