@@ -59,3 +59,13 @@ Thumbs.db
 
 # Autonomous action (contains credentials)
 autonomous-mcp.json
+
+# Google API credentials (NEVER commit)
+scripts/credentials.json
+scripts/token.json
+
+# Tuya device scan outputs (may contain device info)
+snapshot.json
+tinytuya.json
+tuya-raw.json
+devices.json
