@@ -16,6 +16,7 @@ from .association import (
 )
 from .config import MemoryConfig
 from .consolidation import ConsolidationEngine
+from .hopfield import HopfieldRecallResult, ModernHopfieldNetwork
 from .predictive import (
     PredictiveDiagnostics,
     calculate_context_relevance,
@@ -278,6 +279,8 @@ class MemoryStore:
         # Phase 6: 連想・統合エンジン
         self._association_engine = AssociationEngine()
         self._consolidation_engine = ConsolidationEngine()
+        # Phase 7: Hopfield連想記憶
+        self._hopfield = ModernHopfieldNetwork(beta=4.0, n_iters=3)
 
     async def connect(self) -> None:
         """Initialize ChromaDB connection (Phase 4: with episodes collection)."""
@@ -420,18 +423,56 @@ class MemoryStore:
         """
         Recall relevant memories based on current context.
 
-        Uses smart scoring with time decay and emotion boost.
+        Uses hybrid scoring: semantic search + Hopfield pattern completion.
+        Hopfield automatically boosts memories that match both semantically and
+        as pattern attractors, improving recall of fragmented/noisy queries.
+        Falls back to semantic-only if Hopfield is unavailable.
         """
+        # セマンティック検索（候補プールを広めに取る）
+        pool_size = min(n_results * 3, 20)
         scored_results = await self.search_with_scoring(
             query=context,
-            n_results=n_results,
+            n_results=pool_size,
             use_time_decay=True,
             use_emotion_boost=True,
         )
-        # ScoredMemory -> MemorySearchResult に変換
+
+        if not scored_results:
+            return []
+
+        # Hopfield パターン補完（失敗時は semantic のみで続行）
+        try:
+            hopfield_results = await self.hopfield_recall(
+                query=context,
+                n_results=pool_size,
+                auto_load=True,
+            )
+            # memory_id -> hopfield_score のマップ
+            hopfield_scores: dict[str, float] = {
+                r.memory_id: r.hopfield_score for r in hopfield_results
+            }
+        except Exception:
+            hopfield_scores = {}
+
+        # ハイブリッドスコア計算
+        # semantic final_score は低いほど良い（距離）
+        # hopfield_score は高いほど良い（類似度 -1〜1）
+        # → hopfield が高い記憶ほど final_score を下げてブースト
+        hopfield_weight = 0.15
+        blended: list[tuple[ScoredMemory, float]] = []
+        for sr in scored_results:
+            h_score = hopfield_scores.get(sr.memory.id, 0.0)
+            # h_score が 0〜1 範囲に収まるようクランプ
+            h_boost = max(0.0, h_score) * hopfield_weight
+            blended_score = sr.final_score - h_boost
+            blended.append((sr, blended_score))
+
+        # ブレンドスコア昇順（低いほど良い）でソート
+        blended.sort(key=lambda x: x[1])
+
         return [
-            MemorySearchResult(memory=sr.memory, distance=sr.final_score)
-            for sr in scored_results
+            MemorySearchResult(memory=sr.memory, distance=blended_score)
+            for sr, blended_score in blended[:n_results]
         ]
 
     async def list_recent(
@@ -1402,6 +1443,99 @@ class MemoryStore:
             link_update_strength=link_update_strength,
         )
         return stats.to_dict()
+
+    # Phase 7: Hopfield連想記憶
+
+    async def hopfield_load(self) -> int:
+        """ChromaDBの全記憶をHopfieldに読み込む.
+
+        ChromaDB embeddings → Hopfield weight matrix に格納。
+        記憶が追加/変更されたら再ロードが必要。
+
+        Returns:
+            ロードした記憶数
+        """
+        collection = self._ensure_connected()
+
+        # ChromaDBから全記憶の埋め込みを取得
+        result = await asyncio.to_thread(
+            collection.get,
+            include=["embeddings", "documents"],
+        )
+
+        if not result or not result.get("ids"):
+            self._hopfield.store([], [], [])
+            return 0
+
+        ids = result["ids"]
+        embeddings_raw = result.get("embeddings")
+        embeddings = embeddings_raw if embeddings_raw is not None else []
+        documents_raw = result.get("documents")
+        documents = documents_raw if documents_raw is not None else []
+
+        # 埋め込みがない場合はスキップ
+        valid_embeddings = []
+        valid_ids = []
+        valid_contents = []
+        for i, (emb, doc) in enumerate(zip(embeddings, documents)):
+            if emb is not None and len(emb) > 0:
+                valid_embeddings.append(emb)
+                valid_ids.append(ids[i])
+                valid_contents.append(doc or "")
+
+        self._hopfield.store(valid_embeddings, valid_ids, valid_contents)
+        return self._hopfield.n_memories
+
+    async def hopfield_recall(
+        self,
+        query: str,
+        n_results: int = 5,
+        beta: float | None = None,
+        auto_load: bool = True,
+    ) -> list[HopfieldRecallResult]:
+        """Hopfieldパターン補完で記憶を連想想起する.
+
+        通常のベクトル検索と違い、クエリを格納済みパターンに「引き寄せる」補完を行う。
+        ノイズの多いクエリや、断片的な手がかりからの想起に強い。
+
+        Args:
+            query: 検索クエリテキスト
+            n_results: 返す記憶の数 (1-20)
+            beta: 逆温度（None でデフォルト 4.0 を使用）
+            auto_load: True の場合、未ロードなら自動でChromaDBからロードする
+
+        Returns:
+            HopfieldRecallResultのリスト（Hopfield類似度降順）
+        """
+        import chromadb.utils.embedding_functions as ef_utils
+
+        # 自動ロード
+        if auto_load and not self._hopfield.is_loaded:
+            await self.hopfield_load()
+
+        if not self._hopfield.is_loaded:
+            return []
+
+        # Hopfieldのbetaを一時的に変更（指定ありの場合）
+        original_beta = self._hopfield.beta
+        if beta is not None:
+            self._hopfield.beta = beta
+
+        try:
+            # ChromaDBのデフォルト埋め込み関数でクエリを埋め込む
+            embed_fn = ef_utils.DefaultEmbeddingFunction()
+            query_embeddings = await asyncio.to_thread(embed_fn, [query])
+            query_embedding = query_embeddings[0]
+
+            # Hopfield更新則でパターン補完
+            _, similarities = self._hopfield.retrieve(query_embedding)
+
+            # 上位n件を取得
+            results = self._hopfield.recall_results(similarities, k=n_results)
+        finally:
+            self._hopfield.beta = original_beta
+
+        return results
 
     def _build_divergent_diagnostics(
         self,
