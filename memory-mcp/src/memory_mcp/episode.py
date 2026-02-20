@@ -1,15 +1,13 @@
-"""Episode memory management."""
+"""Episode memory management (Phase 11: SQLite backend)."""
 
 import asyncio
 import uuid
-from typing import TYPE_CHECKING, Any
-
-import chromadb
+from typing import TYPE_CHECKING
 
 from .types import Episode
 
 if TYPE_CHECKING:
-    from .memory import MemoryStore
+    from .store import MemoryStore
 
 
 class EpisodeManager:
@@ -19,19 +17,8 @@ class EpisodeManager:
     例: 「朝の空を探した体験」= 複数の記憶をストーリーとして統合
     """
 
-    def __init__(
-        self,
-        memory_store: "MemoryStore",
-        collection: chromadb.Collection,
-    ):
-        """Initialize episode manager.
-
-        Args:
-            memory_store: MemoryStoreインスタンス（記憶の取得・更新用）
-            collection: episodesコレクション
-        """
+    def __init__(self, memory_store: "MemoryStore"):
         self._memory_store = memory_store
-        self._collection = collection
         self._lock = asyncio.Lock()
 
     async def create_episode(
@@ -41,42 +28,24 @@ class EpisodeManager:
         participants: list[str] | None = None,
         auto_summarize: bool = True,
     ) -> Episode:
-        """エピソードを作成.
-
-        Args:
-            title: エピソードのタイトル
-            memory_ids: 含める記憶のIDリスト
-            participants: 関与した人物（例: ["幼馴染"]）
-            auto_summarize: 自動でサマリー生成（全記憶を結合）
-
-        Returns:
-            作成されたEpisode
-
-        Raises:
-            ValueError: memory_idsが空の場合
-        """
+        """エピソードを作成."""
         if not memory_ids:
             raise ValueError("memory_ids cannot be empty")
 
-        # 記憶を取得して時系列順にソート
         memories = await self._memory_store.get_by_ids(memory_ids)
         if not memories:
             raise ValueError("No memories found for the given IDs")
 
         memories.sort(key=lambda m: m.timestamp)
 
-        # サマリー生成
         if auto_summarize:
-            # 各記憶の冒頭50文字を " → " でつなぐ
             summary = " → ".join(m.content[:50] for m in memories)
         else:
             summary = ""
 
-        # 感情は最も重要度の高い記憶から
         most_important = max(memories, key=lambda m: m.importance)
         emotion = most_important.emotion
 
-        # エピソードを作成
         episode = Episode(
             id=str(uuid.uuid4()),
             title=title,
@@ -84,187 +53,49 @@ class EpisodeManager:
             end_time=memories[-1].timestamp if len(memories) > 1 else None,
             memory_ids=tuple(m.id for m in memories),
             participants=tuple(participants or []),
-            location_context=None,  # 将来の拡張用
+            location_context=None,
             summary=summary,
             emotion=emotion,
             importance=max(m.importance for m in memories),
         )
 
-        # ChromaDBに保存
-        await self._save_episode(episode)
+        await self._memory_store.save_episode(episode)
 
-        # 各記憶にepisode_idを設定
         for memory in memories:
-            await self._memory_store.update_episode_id(
-                memory.id,
-                episode.id,
-            )
+            await self._memory_store.update_episode_id(memory.id, episode.id)
 
         return episode
 
-    async def _save_episode(self, episode: Episode) -> None:
-        """エピソードをChromaDBに保存（内部用）.
-
-        Args:
-            episode: 保存するエピソード
-        """
-        async with self._lock:
-            await asyncio.to_thread(
-                self._collection.add,
-                ids=[episode.id],
-                documents=[episode.summary],
-                metadatas=[episode.to_metadata()],
-            )
-
-    async def search_episodes(
-        self,
-        query: str,
-        n_results: int = 5,
-    ) -> list[Episode]:
-        """エピソードを検索（サマリーでsemantic search）.
-
-        Args:
-            query: 検索クエリ
-            n_results: 最大結果数
-
-        Returns:
-            検索結果のエピソードリスト
-        """
-        async with self._lock:
-            results = await asyncio.to_thread(
-                self._collection.query,
-                query_texts=[query],
-                n_results=n_results,
-            )
-
-        episodes: list[Episode] = []
-
-        if results and results.get("ids") and results["ids"][0]:
-            ep_documents = (results.get("documents") or [[]])[0]
-            ep_metadatas = (results.get("metadatas") or [[]])[0]
-            for i, episode_id in enumerate(results["ids"][0]):
-                summary = ep_documents[i] if i < len(ep_documents) else ""
-                raw_metadata = ep_metadatas[i] if i < len(ep_metadatas) else {}
-                metadata: dict[str, Any] = dict(raw_metadata)
-
-                episode = Episode.from_metadata(
-                    id=episode_id,
-                    summary=summary,
-                    metadata=metadata,
-                )
-                episodes.append(episode)
-
-        return episodes
+    async def search_episodes(self, query: str, n_results: int = 5) -> list[Episode]:
+        """エピソードを検索."""
+        return await self._memory_store.search_episodes(query=query, n_results=n_results)
 
     async def get_episode_by_id(self, episode_id: str) -> Episode | None:
-        """エピソードIDから取得.
+        """エピソードIDから取得."""
+        return await self._memory_store.get_episode_by_id(episode_id)
 
-        Args:
-            episode_id: エピソードID
-
-        Returns:
-            Episode、見つからなければNone
-        """
-        async with self._lock:
-            results = await asyncio.to_thread(
-                self._collection.get,
-                ids=[episode_id],
-            )
-
-        if not results or not results.get("ids"):
-            return None
-
-        ep_docs = results.get("documents") or []
-        ep_metas = results.get("metadatas") or []
-        summary = ep_docs[0] if ep_docs else ""
-        raw_metadata = ep_metas[0] if ep_metas else {}
-        metadata: dict[str, Any] = dict(raw_metadata)
-
-        return Episode.from_metadata(
-            id=episode_id,
-            summary=summary,
-            metadata=metadata,
-        )
-
-    async def get_episode_memories(
-        self,
-        episode_id: str,
-    ) -> list:
-        """エピソードに含まれる記憶を時系列順で取得.
-
-        Args:
-            episode_id: エピソードID
-
-        Returns:
-            記憶のリスト（時系列順）
-
-        Raises:
-            ValueError: エピソードが見つからない場合
-        """
+    async def get_episode_memories(self, episode_id: str) -> list:
+        """エピソードに含まれる記憶を時系列順で取得."""
         episode = await self.get_episode_by_id(episode_id)
         if episode is None:
             raise ValueError(f"Episode not found: {episode_id}")
 
-        # 記憶を取得
         memories = await self._memory_store.get_by_ids(list(episode.memory_ids))
-
-        # 時系列順にソート
         memories.sort(key=lambda m: m.timestamp)
-
         return memories
 
     async def list_all_episodes(self) -> list[Episode]:
-        """全エピソードを取得.
-
-        Returns:
-            全エピソードのリスト（新しい順）
-        """
-        async with self._lock:
-            results = await asyncio.to_thread(
-                self._collection.get,
-            )
-
-        episodes: list[Episode] = []
-
-        if results and results.get("ids"):
-            all_docs = results.get("documents") or []
-            all_metas = results.get("metadatas") or []
-            for i, episode_id in enumerate(results["ids"]):
-                summary = all_docs[i] if i < len(all_docs) else ""
-                raw_metadata_item = all_metas[i] if i < len(all_metas) else {}
-                metadata_item: dict[str, Any] = dict(raw_metadata_item)
-
-                episode = Episode.from_metadata(
-                    id=episode_id,
-                    summary=summary,
-                    metadata=metadata_item,
-                )
-                episodes.append(episode)
-
-        # 開始時刻で降順ソート（新しい順）
-        episodes.sort(key=lambda e: e.start_time, reverse=True)
-
-        return episodes
+        """全エピソードを取得（新しい順）."""
+        return await self._memory_store.list_all_episodes()
 
     async def delete_episode(self, episode_id: str) -> None:
-        """エピソードを削除（記憶は削除しない）.
-
-        Args:
-            episode_id: 削除するエピソードID
-        """
-        # エピソードに含まれる記憶のepisode_idをクリア
+        """エピソードを削除（記憶は削除しない）."""
         episode = await self.get_episode_by_id(episode_id)
         if episode:
             for memory_id in episode.memory_ids:
                 try:
                     await self._memory_store.update_episode_id(memory_id, "")
                 except ValueError:
-                    # 記憶が見つからない場合はスキップ
                     pass
 
-        # エピソードを削除
-        async with self._lock:
-            await asyncio.to_thread(
-                self._collection.delete,
-                ids=[episode_id],
-            )
+        await self._memory_store.delete_episode(episode_id)

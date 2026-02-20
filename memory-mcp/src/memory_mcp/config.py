@@ -21,7 +21,7 @@ class MemoryConfig:
     @classmethod
     def from_env(cls) -> "MemoryConfig":
         """Create config from environment variables."""
-        default_path = str(Path.home() / ".claude" / "memories" / "chroma")
+        default_path = str(Path.home() / ".claude" / "memories" / "memory.db")
 
         return cls(
             db_path=os.getenv("MEMORY_DB_PATH", default_path),

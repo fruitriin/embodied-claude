@@ -1293,8 +1293,7 @@ Date Range:
         logger.info(f"Connected to memory store at {config.db_path}")
 
         # Phase 4.2: Initialize episode manager
-        episodes_collection = self._memory_store.get_episodes_collection()
-        self._episode_manager = EpisodeManager(self._memory_store, episodes_collection)
+        self._episode_manager = EpisodeManager(self._memory_store)
         logger.info("Episode manager initialized")
 
         # Phase 4.3: Initialize sensory integration

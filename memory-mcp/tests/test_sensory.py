@@ -18,7 +18,7 @@ async def memory_store():
     temp_dir = tempfile.mkdtemp(prefix="test_sensory_")
 
     config = MemoryConfig(
-        db_path=temp_dir,
+        db_path=temp_dir + "/memory.db",
         collection_name="test_memories",
     )
     store = MemoryStore(config)

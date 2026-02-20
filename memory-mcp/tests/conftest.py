@@ -6,13 +6,13 @@ import pytest
 import pytest_asyncio
 
 from memory_mcp.config import MemoryConfig
-from memory_mcp.memory import MemoryStore
+from memory_mcp.store import MemoryStore
 
 
 @pytest.fixture
 def temp_db_path(tmp_path: Path) -> str:
-    """Create a temporary database path."""
-    return str(tmp_path / "test_chroma")
+    """Create a temporary SQLite database path."""
+    return str(tmp_path / "test_memory.db")
 
 
 @pytest.fixture

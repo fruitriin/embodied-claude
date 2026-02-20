@@ -1,8 +1,7 @@
 """カスタム埋め込み関数モジュール。
 
-intfloat/multilingual-e5-base を ChromaDB で使うためのラッパー。
-e5 モデルはクエリと文書で異なるプレフィックスが必要なため、
-標準の SentenceTransformerEmbeddingFunction は使えない。
+intfloat/multilingual-e5-base の SentenceTransformer ラッパー。
+e5 モデルはクエリと文書で異なるプレフィックスが必要。
 """
 
 from __future__ import annotations
@@ -10,22 +9,15 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from chromadb import EmbeddingFunction
-
 logger = logging.getLogger(__name__)
 
 
-class E5EmbeddingFunction(EmbeddingFunction):
-    """intfloat/multilingual-e5-base 用カスタム埋め込み関数。
+class E5EmbeddingFunction:
+    """intfloat/multilingual-e5-base 用埋め込み関数。
 
     e5 モデルの仕様:
     - 文書（passage）保存時: "passage: {text}" としてエンコード
     - クエリ検索時: "query: {text}" としてエンコード
-
-    ChromaDB の EmbeddingFunction プロトコルに準拠:
-    - __call__(input: Documents) -> Embeddings  # 文書保存用（passage プレフィックス）
-
-    クエリ用は encode_query() メソッドで別途提供。
 
     Args:
         model_name: SentenceTransformer モデル名
@@ -34,13 +26,6 @@ class E5EmbeddingFunction(EmbeddingFunction):
     def __init__(self, model_name: str = "intfloat/multilingual-e5-base") -> None:
         self._model_name = model_name
         self._model: Any = None  # lazy load; actual type is SentenceTransformer
-
-    @staticmethod
-    def name() -> str:
-        return "E5EmbeddingFunction"
-
-    def get_config(self) -> dict[str, str]:
-        return {"model_name": self._model_name}
 
     def _load_model(self) -> None:
         """モデルを遅延ロード。"""
@@ -56,10 +41,8 @@ class E5EmbeddingFunction(EmbeddingFunction):
                     "`uv add sentence-transformers` を実行してください。"
                 ) from e
 
-    def __call__(self, input: list[str]) -> list[list[float]]:  # type: ignore[override]
+    def __call__(self, input: list[str]) -> list[list[float]]:
         """文書保存用埋め込み（passage: プレフィックス）。
-
-        ChromaDB の EmbeddingFunction プロトコルに準拠。
 
         Args:
             input: エンコードするテキストのリスト
@@ -78,8 +61,6 @@ class E5EmbeddingFunction(EmbeddingFunction):
 
     def encode_query(self, texts: list[str]) -> list[list[float]]:
         """クエリ検索用埋め込み（query: プレフィックス）。
-
-        collection.query() の query_embeddings に渡す際に使用。
 
         Args:
             texts: クエリテキストのリスト
