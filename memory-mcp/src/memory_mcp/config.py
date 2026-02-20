@@ -15,6 +15,7 @@ class MemoryConfig:
 
     db_path: str
     collection_name: str
+    embedding_model: str = "intfloat/multilingual-e5-base"
 
     @classmethod
     def from_env(cls) -> "MemoryConfig":
@@ -24,6 +25,7 @@ class MemoryConfig:
         return cls(
             db_path=os.getenv("MEMORY_DB_PATH", default_path),
             collection_name=os.getenv("MEMORY_COLLECTION_NAME", "claude_memories"),
+            embedding_model=os.getenv("MEMORY_EMBEDDING_MODEL", "intfloat/multilingual-e5-base"),
         )
 
 
