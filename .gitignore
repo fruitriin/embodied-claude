@@ -20,6 +20,9 @@ wheels/
 .installed.cfg
 *.egg
 
+# Node.js / Bun
+node_modules
+
 # Virtual environments
 .venv/
 venv/
