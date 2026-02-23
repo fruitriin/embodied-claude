@@ -102,6 +102,19 @@ class VacuumMobilityController:
         await self._send_direction(DIRECTION_STOP)
         return "Stopped."
 
+    async def return_to_dock(self) -> str:
+        """Send the vacuum back to its charging dock."""
+        cloud = self._ensure_cloud()
+        # Send mode=chargego to return to charging dock
+        commands = {"commands": [{"code": "mode", "value": "chargego"}]}
+        result = await asyncio.to_thread(
+            cloud.sendcommand, self._config.device_id, commands
+        )
+        logger.info("Sent return to dock command -> %s", result)
+        if isinstance(result, dict) and result.get("success"):
+            return "Returning to charging dock."
+        return f"Return to dock command sent (result: {result})."
+
     async def get_status(self) -> dict:
         """Get current device status."""
         cloud = self._ensure_cloud()
