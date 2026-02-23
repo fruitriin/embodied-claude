@@ -129,6 +129,30 @@ class MobilityMCPServer:
                         "required": [],
                     },
                 ),
+                Tool(
+                    name="start_cleaning",
+                    description=(
+                        "Start smart cleaning mode. Use this to make the robot "
+                        "leave the charging dock and begin cleaning."
+                    ),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                    },
+                ),
+                Tool(
+                    name="return_to_dock",
+                    description=(
+                        "Return your body (robot vacuum) to the charging dock. "
+                        "Use this when the battery is low or you are done moving."
+                    ),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                    },
+                ),
             ]
 
         @self._server.call_tool()
@@ -158,8 +182,13 @@ class MobilityMCPServer:
 
                 elif name == "body_status":
                     status = await controller.get_status()
-                    dps = status.get("dps", {})
-                    result = f"Device status: {dps}"
+                    result = f"Device status: {status}"
+
+                elif name == "start_cleaning":
+                    result = await controller.start_cleaning()
+
+                elif name == "return_to_dock":
+                    result = await controller.return_to_dock()
 
                 else:
                     result = f"Unknown tool: {name}"
