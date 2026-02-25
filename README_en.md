@@ -53,6 +53,7 @@ Traditional LLMs were passive — they could only see what was shown to them. Wi
 - ElevenLabs API key (text-to-speech, optional)
 - VOICEVOX (text-to-speech, free & local, optional)
 - go2rtc (camera speaker output, auto-downloaded)
+- **mpv or ffplay** (local audio playback): mpv recommended (see below)
 
 ## Setup
 
@@ -139,6 +140,16 @@ cp .env.example .env
 # PULSE_SINK=1
 # PULSE_SERVER=unix:/mnt/wslg/PulseServer
 ```
+
+> **mpv or ffplay is required for local audio playback.** Not needed for camera speaker (go2rtc) output, but used for local/fallback playback.
+>
+> | OS | Install |
+> |----|---------|
+> | macOS | `brew install mpv` |
+> | Ubuntu / Debian | `sudo apt install mpv` |
+> | Windows | [mpv.io/installation](https://mpv.io/installation/) or `winget install ffmpeg` |
+>
+> If neither is installed, TTS will generate audio but not play it locally (no error is raised).
 
 #### system-temperature-mcp (Body Temperature)
 

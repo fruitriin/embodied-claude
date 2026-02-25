@@ -54,6 +54,7 @@
 - ElevenLabs API キー（音声合成用、任意）
 - VOICEVOX（音声合成用、無料・ローカル、任意）
 - go2rtc（カメラスピーカー出力用、自動ダウンロード対応）
+- **mpv または ffplay**（ローカル音声再生用）: mpv 推奨（後述）
 
 ## セットアップ
 
@@ -186,6 +187,16 @@ cp .env.example .env
 # PULSE_SINK=1
 # PULSE_SERVER=unix:/mnt/wslg/PulseServer
 ```
+
+> **音声再生には mpv または ffplay が必要です。** カメラスピーカー（go2rtc）経由の再生には不要ですが、ローカル再生（フォールバック含む）に使われます。
+>
+> | OS | インストール |
+> |----|------------|
+> | macOS | `brew install mpv` |
+> | Ubuntu / Debian | `sudo apt install mpv` |
+> | Windows | [mpv.io/installation](https://mpv.io/installation/) または `winget install ffmpeg` |
+>
+> mpv も ffplay もない場合、音声生成は行われますが再生されません（エラーにはなりません）。
 
 #### system-temperature-mcp（体温感覚）
 
