@@ -142,6 +142,20 @@ class MobilityMCPServer:
                     },
                 ),
                 Tool(
+                    name="stop_cleaning",
+                    description=(
+                        "Stop the current cleaning session and enter manual-ready standby. "
+                        "Call this after start_cleaning to switch from auto-cleaning to "
+                        "manual movement mode. After this, move_forward/turn_left etc. "
+                        "work without the robot resuming auto-cleaning."
+                    ),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                    },
+                ),
+                Tool(
                     name="return_to_dock",
                     description=(
                         "Return your body (robot vacuum) to the charging dock. "
@@ -186,6 +200,9 @@ class MobilityMCPServer:
 
                 elif name == "start_cleaning":
                     result = await controller.start_cleaning()
+
+                elif name == "stop_cleaning":
+                    result = await controller.stop_cleaning()
 
                 elif name == "return_to_dock":
                     result = await controller.return_to_dock()

@@ -7,7 +7,7 @@ import logging
 
 import tinytuya
 
-from .config import DIRECTION_DP, TuyaCloudConfig
+from .config import TuyaCloudConfig
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +113,18 @@ class VacuumMobilityController:
         if isinstance(result, dict) and result.get("success"):
             return "Started smart cleaning. Moving away from dock."
         return f"Start cleaning command sent (result: {result})."
+
+    async def stop_cleaning(self) -> str:
+        """Stop cleaning and enter manual-ready standby (power_go=false)."""
+        cloud = self._ensure_cloud()
+        commands = {"commands": [{"code": "power_go", "value": False}]}
+        result = await asyncio.to_thread(
+            cloud.sendcommand, self._config.device_id, commands
+        )
+        logger.info("Sent stop cleaning command -> %s", result)
+        if isinstance(result, dict) and result.get("success"):
+            return "Cleaning stopped. Now in manual-ready standby — use move_forward/turn_left etc."
+        return f"Stop cleaning command sent (result: {result})."
 
     async def return_to_dock(self) -> str:
         """Send the vacuum back to its charging dock."""
