@@ -14,21 +14,26 @@ from mcp.types import (
     Tool,
 )
 
+from ._behavior import get_behavior
+
 
 server = Server("ip-webcam-mcp")
 
-# 環境変数から設定を読み取る
+# 環境変数から設定を読み取る（シークレット）
 HOST = os.environ.get("IP_WEBCAM_HOST", "")
-PORT = os.environ.get("IP_WEBCAM_PORT", "8080")
 USERNAME = os.environ.get("IP_WEBCAM_USERNAME", "")
 PASSWORD = os.environ.get("IP_WEBCAM_PASSWORD", "")
+
+# 行動設定のデフォルト（TOML > env > default）
+_DEFAULT_PORT = os.environ.get("IP_WEBCAM_PORT", "8080")
 
 
 def get_base_url() -> str:
     """ベース URL を返す。HOST が未設定の場合は例外を投げる。"""
     if not HOST:
         raise RuntimeError("環境変数 IP_WEBCAM_HOST が設定されていません")
-    return f"http://{HOST}:{PORT}"
+    port = get_behavior("ip-webcam", "port", _DEFAULT_PORT)
+    return f"http://{HOST}:{port}"
 
 
 def get_auth() -> httpx.BasicAuth | None:
@@ -98,6 +103,11 @@ async def run_server():
 
 def main():
     """エントリーポイント。"""
+    try:
+        import jurigged
+        jurigged.live()
+    except ImportError:
+        pass
     asyncio.run(run_server())
 
 

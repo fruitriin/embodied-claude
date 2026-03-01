@@ -7,6 +7,13 @@ dependencies = [
     "mcp>=1.0.0",
     "httpx>=0.25.0",
     "pillow>=10.0.0",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.3.0",
+    "jurigged>=0.6.0",
 ]
 
 [project.scripts]

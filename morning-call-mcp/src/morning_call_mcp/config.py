@@ -31,7 +31,13 @@ class Config:
     ngrok_auth_token: str = os.environ.get("NGROK_AUTH_TOKEN", "")
 
     # Local HTTP server port for serving audio
-    local_port: int = int(os.environ.get("MORNING_CALL_PORT", "18765"))
+    _default_port: int = int(os.environ.get("MORNING_CALL_PORT", "18765"))
+
+    @property
+    def local_port(self) -> int:
+        from ._behavior import get_behavior
+
+        return int(get_behavior("morning-call", "local_port", self._default_port))
 
     def validate(self) -> None:
         missing = []

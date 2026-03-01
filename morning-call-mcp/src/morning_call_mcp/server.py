@@ -73,6 +73,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 
 def main() -> None:
+    try:
+        import jurigged
+        jurigged.live()
+    except ImportError:
+        pass
     asyncio.run(_run())
 
 

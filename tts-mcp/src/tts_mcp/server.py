@@ -15,6 +15,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 from . import playback
+from ._behavior import load_behavior
 from .config import ServerConfig, TTSConfig
 from .engines import TTSEngine
 from .engines.elevenlabs import ElevenLabsEngine
@@ -61,7 +62,11 @@ class TTSMCP:
 
     def _get_engine(self, requested: str | None = None) -> TTSEngine:
         """Get the appropriate TTS engine."""
-        name = self._config.resolve_engine(requested)
+        # TOML > explicit request > env default
+        behavior = load_behavior("tts")
+        toml_engine = behavior.get("default_engine", "") or None
+        effective_requested = requested or toml_engine
+        name = self._config.resolve_engine(effective_requested)
         engine = self._engines.get(name)
         if engine is None:
             available = list(self._engines.keys())
@@ -152,7 +157,10 @@ class TTSMCP:
                 return [TextContent(type="text", text="Error: 'text' is required")]
 
             pb = self._config.playback
-            play_audio = arguments.get("play_audio", pb.play_audio)
+            behavior = load_behavior("tts")
+            play_audio = arguments.get(
+                "play_audio", behavior.get("play_audio", pb.play_audio),
+            )
             speaker_target = arguments.get("speaker") or (
                 "both" if pb.go2rtc_url else "local"
             )
@@ -178,7 +186,9 @@ class TTSMCP:
                         kwargs["pitch_scale"] = arguments["pitch_scale"]
 
                 # Try streaming for ElevenLabs
-                playback_mode = (pb.playback or "auto").strip().lower()
+                playback_mode = (
+                    behavior.get("playback", pb.playback) or "auto"
+                ).strip().lower()
                 use_streaming = (
                     play_audio
                     and use_local
@@ -306,6 +316,11 @@ class TTSMCP:
 
 
 def main() -> None:
+    try:
+        import jurigged
+        jurigged.live()
+    except ImportError:
+        pass
     asyncio.run(TTSMCP().run())
 
 
