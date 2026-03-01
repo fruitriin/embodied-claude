@@ -9,7 +9,7 @@ from typing import Any
 try:
     import tomllib
 except ModuleNotFoundError:
-    import tomli as tomllib  # type: ignore[no-redef]
+    import tomli as tomllib  # type: ignore[no-redef,unused-ignore]
 
 _TOML_PATH = Path(
     os.getenv("MCP_BEHAVIOR_TOML", "")
