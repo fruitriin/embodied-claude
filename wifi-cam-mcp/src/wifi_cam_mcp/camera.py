@@ -12,6 +12,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from ._behavior import get_behavior
 from .config import CameraConfig
 
 logger = logging.getLogger(__name__)
@@ -283,7 +284,8 @@ class TapoCamera:
         image = Image.open(io.BytesIO(image_data))
 
         # In ceiling mount mode the image is upside-down, so rotate 180°.
-        if self._config.mount_mode == "ceiling":
+        mount_mode = get_behavior("wifi-cam", "mount_mode", self._config.mount_mode)
+        if mount_mode == "ceiling":
             image = image.rotate(180)
 
         # Resize if needed
@@ -438,7 +440,8 @@ class TapoCamera:
         # In ceiling mount mode the camera is upside-down:
         # - Tilt inverts (y=+1.0 becomes the upper limit)
         # - Pan mirrors (left/right swap)
-        if self._config.mount_mode == "ceiling":
+        mount_mode = get_behavior("wifi-cam", "mount_mode", self._config.mount_mode)
+        if mount_mode == "ceiling":
             pan_delta = -pan_delta
             tilt_delta = -tilt_delta
 
@@ -505,7 +508,8 @@ class TapoCamera:
                 pan = status.Position.PanTilt.x
                 # Tapo ONVIF: y+ = physical DOWN (desk mount), flip for user
                 tilt = -status.Position.PanTilt.y
-                if self._config.mount_mode == "ceiling":
+                mount_mode = get_behavior("wifi-cam", "mount_mode", self._config.mount_mode)
+                if mount_mode == "ceiling":
                     # Ceiling: camera upside-down, both axes mirror
                     pan = -pan
                     tilt = -tilt

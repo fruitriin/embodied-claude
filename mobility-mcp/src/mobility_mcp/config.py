@@ -53,3 +53,24 @@ DIRECTION_DP = int(os.getenv("TUYA_DIRECTION_DP", "4"))
 # Duration for timed movements (seconds)
 DEFAULT_MOVE_DURATION = float(os.getenv("DEFAULT_MOVE_DURATION", "1.0"))
 MAX_MOVE_DURATION = float(os.getenv("MAX_MOVE_DURATION", "10.0"))
+
+
+def get_max_move_duration() -> float:
+    """Get max move duration from TOML > env > default."""
+    from ._behavior import get_behavior
+
+    return float(get_behavior("mobility", "max_move_duration", MAX_MOVE_DURATION))
+
+
+def get_default_move_duration() -> float:
+    """Get default move duration from TOML > env > default."""
+    from ._behavior import get_behavior
+
+    return float(get_behavior("mobility", "default_move_duration", DEFAULT_MOVE_DURATION))
+
+
+def get_direction_dp() -> int:
+    """Get direction DP from TOML > env > default."""
+    from ._behavior import get_behavior
+
+    return int(get_behavior("mobility", "direction_dp", DIRECTION_DP))

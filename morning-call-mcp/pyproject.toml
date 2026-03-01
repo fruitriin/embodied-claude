@@ -11,6 +11,12 @@ dependencies = [
     "elevenlabs>=2.36.1",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.3.0",
+    "jurigged>=0.6.0",
+]
+
 [project.scripts]
 morning-call-mcp = "morning_call_mcp.server:main"
 

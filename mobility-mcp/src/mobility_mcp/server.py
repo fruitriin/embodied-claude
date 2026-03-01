@@ -8,22 +8,11 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from .config import MAX_MOVE_DURATION, TuyaCloudConfig
+from .config import TuyaCloudConfig, get_max_move_duration
 from .vacuum import VacuumMobilityController
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-DURATION_SCHEMA = {
-    "type": "number",
-    "description": (
-        "How long to move in seconds (default: continuous until stop). "
-        f"Max: {MAX_MOVE_DURATION}s."
-    ),
-    "minimum": 0.1,
-    "maximum": MAX_MOVE_DURATION,
-}
 
 
 class MobilityMCPServer:
@@ -45,7 +34,7 @@ class MobilityMCPServer:
         """Clamp duration to safe range."""
         if duration is None:
             return None
-        return max(0.1, min(duration, MAX_MOVE_DURATION))
+        return max(0.1, min(duration, get_max_move_duration()))
 
     def _setup_handlers(self) -> None:
         """Set up MCP tool handlers."""
@@ -53,6 +42,16 @@ class MobilityMCPServer:
         @self._server.list_tools()
         async def list_tools() -> list[Tool]:
             """List available mobility tools."""
+            max_dur = get_max_move_duration()
+            duration_schema = {
+                "type": "number",
+                "description": (
+                    "How long to move in seconds (default: continuous until stop). "
+                    f"Max: {max_dur}s."
+                ),
+                "minimum": 0.1,
+                "maximum": max_dur,
+            }
             return [
                 Tool(
                     name="move_forward",
@@ -63,7 +62,7 @@ class MobilityMCPServer:
                     ),
                     inputSchema={
                         "type": "object",
-                        "properties": {"duration": DURATION_SCHEMA},
+                        "properties": {"duration": duration_schema},
                         "required": [],
                     },
                 ),
@@ -75,7 +74,7 @@ class MobilityMCPServer:
                     ),
                     inputSchema={
                         "type": "object",
-                        "properties": {"duration": DURATION_SCHEMA},
+                        "properties": {"duration": duration_schema},
                         "required": [],
                     },
                 ),
@@ -88,7 +87,7 @@ class MobilityMCPServer:
                     ),
                     inputSchema={
                         "type": "object",
-                        "properties": {"duration": DURATION_SCHEMA},
+                        "properties": {"duration": duration_schema},
                         "required": [],
                     },
                 ),
@@ -101,7 +100,7 @@ class MobilityMCPServer:
                     ),
                     inputSchema={
                         "type": "object",
-                        "properties": {"duration": DURATION_SCHEMA},
+                        "properties": {"duration": duration_schema},
                         "required": [],
                     },
                 ),
@@ -232,6 +231,11 @@ class MobilityMCPServer:
 
 def main():
     """Entry point."""
+    try:
+        import jurigged
+        jurigged.watch(pattern="src/**/*.py", logger=None)
+    except ImportError:
+        pass
     server = MobilityMCPServer()
     asyncio.run(server.run())
 

@@ -14,6 +14,7 @@ from mcp.types import (
     Tool,
 )
 
+from ._behavior import get_behavior
 from .camera import TapoCamera
 from .config import CameraConfig, ServerConfig
 
@@ -465,8 +466,11 @@ class CameraMCPServer:
                     case "listen":
                         duration = min(arguments.get("duration", 5), 30)
                         transcribe = arguments.get("transcribe", True)
+                        mic_source = get_behavior(
+                            "wifi-cam", "mic_source", self._server_config.mic_source
+                        )
                         result = await self._camera.listen_audio(
-                            duration, transcribe, self._server_config.mic_source
+                            duration, transcribe, mic_source
                         )
 
                         response_text = (
@@ -754,6 +758,11 @@ class CameraMCPServer:
 
 def main() -> None:
     """Entry point for the MCP server."""
+    try:
+        import jurigged
+        jurigged.watch(pattern="src/**/*.py", logger=None)
+    except ImportError:
+        pass
     server = CameraMCPServer()
     asyncio.run(server.run())
 
