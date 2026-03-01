@@ -318,7 +318,7 @@ class TTSMCP:
 def main() -> None:
     try:
         import jurigged
-        jurigged.live()
+        jurigged.watch()
     except ImportError:
         pass
     asyncio.run(TTSMCP().run())

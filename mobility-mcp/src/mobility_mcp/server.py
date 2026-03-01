@@ -233,7 +233,7 @@ def main():
     """Entry point."""
     try:
         import jurigged
-        jurigged.live()
+        jurigged.watch()
     except ImportError:
         pass
     server = MobilityMCPServer()

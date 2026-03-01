@@ -1331,7 +1331,7 @@ def main() -> None:
     """Entry point for the MCP server."""
     try:
         import jurigged
-        jurigged.live()
+        jurigged.watch()
     except ImportError:
         pass
     server = MemoryMCPServer()
