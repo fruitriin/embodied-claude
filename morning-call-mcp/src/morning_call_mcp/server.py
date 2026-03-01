@@ -75,7 +75,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 def main() -> None:
     try:
         import jurigged
-        jurigged.watch()
+        jurigged.watch(pattern="src/**/*.py", logger=None)
     except ImportError:
         pass
     asyncio.run(_run())

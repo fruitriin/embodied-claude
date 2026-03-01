@@ -105,7 +105,7 @@ def main():
     """エントリーポイント。"""
     try:
         import jurigged
-        jurigged.watch()
+        jurigged.watch(pattern="src/**/*.py", logger=None)
     except ImportError:
         pass
     asyncio.run(run_server())
