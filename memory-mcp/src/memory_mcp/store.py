@@ -72,12 +72,16 @@ CREATE TABLE IF NOT EXISTS memories (
     prediction_error REAL NOT NULL DEFAULT 0.0,
     activation_count INTEGER NOT NULL DEFAULT 0,
     last_activated TEXT NOT NULL DEFAULT '',
-    reading TEXT
+    reading TEXT,
+    pan_angle REAL,
+    tilt_angle REAL
 );
 CREATE INDEX IF NOT EXISTS idx_memories_emotion    ON memories(emotion);
 CREATE INDEX IF NOT EXISTS idx_memories_category   ON memories(category);
 CREATE INDEX IF NOT EXISTS idx_memories_timestamp  ON memories(timestamp);
 CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance);
+CREATE INDEX IF NOT EXISTS idx_memories_pan_angle  ON memories(pan_angle);
+CREATE INDEX IF NOT EXISTS idx_memories_tilt_angle ON memories(tilt_angle);
 
 CREATE TABLE IF NOT EXISTS embeddings (
     memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
@@ -105,6 +109,23 @@ CREATE TABLE IF NOT EXISTS episodes (
     emotion TEXT NOT NULL DEFAULT 'neutral',
     importance INTEGER NOT NULL DEFAULT 3
 );
+
+CREATE TABLE IF NOT EXISTS episode_embeddings (
+    episode_id TEXT PRIMARY KEY REFERENCES episodes(id) ON DELETE CASCADE,
+    vector BLOB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS memory_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    target_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    link_type TEXT NOT NULL DEFAULT 'similar',
+    note TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(source_id, target_id, link_type)
+);
+CREATE INDEX IF NOT EXISTS idx_ml_source ON memory_links(source_id);
+CREATE INDEX IF NOT EXISTS idx_ml_target ON memory_links(target_id);
 """
 
 # ──────────────────────────────────────────────
@@ -297,6 +318,66 @@ class MemoryStore:
                         if stmt:
                             conn.execute(stmt)
                     conn.commit()
+                    # Migration: add pan_angle/tilt_angle if missing
+                    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(memories)").fetchall()}
+                    if "pan_angle" not in existing_cols:
+                        conn.execute("ALTER TABLE memories ADD COLUMN pan_angle REAL")
+                        conn.execute("ALTER TABLE memories ADD COLUMN tilt_angle REAL")
+                        rows = conn.execute(
+                            "SELECT id, camera_position FROM memories WHERE camera_position IS NOT NULL"
+                        ).fetchall()
+                        for row in rows:
+                            try:
+                                data = json.loads(row[1])
+                                conn.execute(
+                                    "UPDATE memories SET pan_angle=?, tilt_angle=? WHERE id=?",
+                                    (data.get("pan_angle"), data.get("tilt_angle"), row[0]),
+                                )
+                            except Exception:
+                                pass
+                        conn.commit()
+
+                    # Migration: populate memory_links from legacy linked_ids / links columns
+                    count = conn.execute("SELECT COUNT(*) FROM memory_links").fetchone()[0]
+                    if count == 0:
+                        now = datetime.now().isoformat()
+                        rows = conn.execute("SELECT id, linked_ids, links FROM memories").fetchall()
+                        for row in rows:
+                            mem_id = row["id"]
+                            # linked_ids (CSV) → type='similar', bidirectional
+                            linked_ids_str = row["linked_ids"] or ""
+                            if linked_ids_str:
+                                for lid in linked_ids_str.split(","):
+                                    lid = lid.strip()
+                                    if lid:
+                                        conn.execute(
+                                            """INSERT OR IGNORE INTO memory_links
+                                               (source_id, target_id, link_type, created_at)
+                                               VALUES (?, ?, 'similar', ?)""",
+                                            (mem_id, lid, now),
+                                        )
+                            # links (JSON) → structured links with type
+                            links_json = row["links"] or ""
+                            if links_json:
+                                try:
+                                    links_data = json.loads(links_json)
+                                    for link in links_data:
+                                        conn.execute(
+                                            """INSERT OR IGNORE INTO memory_links
+                                               (source_id, target_id, link_type, note, created_at)
+                                               VALUES (?, ?, ?, ?, ?)""",
+                                            (
+                                                mem_id,
+                                                link["target_id"],
+                                                link["link_type"],
+                                                link.get("note"),
+                                                link.get("created_at", now),
+                                            ),
+                                        )
+                                except (json.JSONDecodeError, KeyError):
+                                    pass
+                        conn.commit()
+
                     return conn
 
                 self._db = await asyncio.to_thread(_open)
@@ -330,6 +411,22 @@ class MemoryStore:
         ).fetchall()
         return tuple((row["target_id"], float(row["weight"])) for row in rows)
 
+    def _fetch_coactivation_batch(
+        self, db: sqlite3.Connection, memory_ids: list[str]
+    ) -> dict[str, tuple[tuple[str, float], ...]]:
+        """Fetch coactivation for multiple memories in one query."""
+        if not memory_ids:
+            return {}
+        placeholders = ",".join("?" * len(memory_ids))
+        rows = db.execute(
+            f"SELECT source_id, target_id, weight FROM coactivation WHERE source_id IN ({placeholders})",
+            memory_ids,
+        ).fetchall()
+        result: dict[str, list[tuple[str, float]]] = {mid: [] for mid in memory_ids}
+        for row in rows:
+            result[row["source_id"]].append((row["target_id"], float(row["weight"])))
+        return {k: tuple(v) for k, v in result.items()}
+
     # ── Fetch helpers ───────────────────────────
 
     def _fetch_memory_by_id(self, db: sqlite3.Connection, memory_id: str) -> Memory | None:
@@ -346,9 +443,11 @@ class MemoryStore:
         rows = db.execute(
             f"SELECT * FROM memories WHERE id IN ({placeholders})", memory_ids
         ).fetchall()
+        # Batch fetch coactivation to avoid N+1
+        coactivation_map = self._fetch_coactivation_batch(db, memory_ids)
         memories: list[Memory] = []
         for row in rows:
-            coactivation = self._get_coactivation(db, row["id"])
+            coactivation = coactivation_map.get(row["id"], ())
             memories.append(_row_to_memory(row, coactivation))
         return memories
 
@@ -364,6 +463,9 @@ class MemoryStore:
         sensory_data: tuple[SensoryData, ...] = (),
         camera_position: CameraPosition | None = None,
         tags: tuple[str, ...] = (),
+        auto_link: bool = True,
+        link_threshold: float = 0.8,
+        max_links: int = 5,
     ) -> Memory:
         """Save a new memory."""
         db = self._ensure_connected()
@@ -390,6 +492,9 @@ class MemoryStore:
         embedding = await self._encode_document(normalized_content)
         vector_blob = encode_vector(embedding)
 
+        pan = camera_position.pan_angle if camera_position else None
+        tilt = camera_position.tilt_angle if camera_position else None
+
         def _insert() -> None:
             meta = memory.to_metadata()
             db.execute(
@@ -398,8 +503,9 @@ class MemoryStore:
                     emotion, importance, category, access_count, last_accessed,
                     linked_ids, episode_id, sensory_data, camera_position,
                     tags, links, novelty_score, prediction_error,
-                    activation_count, last_activated, reading
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    activation_count, last_activated, reading,
+                    pan_angle, tilt_angle
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     memory_id, content, normalized_content, timestamp,
                     emotion, importance, category,
@@ -409,6 +515,7 @@ class MemoryStore:
                     meta.get("camera_position") or None,
                     meta.get("tags", ""), meta.get("links", ""),
                     0.0, 0.0, 0, "", reading,
+                    pan, tilt,
                 ),
             )
             db.execute(
@@ -420,6 +527,19 @@ class MemoryStore:
         await asyncio.to_thread(_insert)
         self._bm25_index.mark_dirty()
         await self._working_memory.add(memory)
+
+        # Auto-link to similar existing memories
+        if auto_link:
+            similar = await self.search(query=content, n_results=max_links)
+            for result in similar:
+                if result.distance <= link_threshold and result.memory.id != memory_id:
+                    await self.add_link(
+                        source_id=memory_id,
+                        target_id=result.memory.id,
+                        link_type="similar",
+                        bidirectional=True,
+                    )
+
         return memory
 
     # ── Vector search helpers ───────────────────
@@ -804,35 +924,41 @@ class MemoryStore:
         target_id: str,
         delta: float = 0.1,
     ) -> bool:
-        """Increment coactivation weights symmetrically."""
+        """Increment coactivation weights symmetrically (no N+1 existence check)."""
         db = self._ensure_connected()
-
-        # Check both exist
-        source = await self.get_by_id(source_id)
-        target = await self.get_by_id(target_id)
-        if source is None or target is None:
-            return False
-
         delta = max(0.0, min(1.0, delta))
 
-        def _bump() -> None:
+        def _bump() -> bool:
+            # Lightweight existence check: one COUNT query instead of two get_by_id
+            count = db.execute(
+                "SELECT COUNT(*) FROM memories WHERE id IN (?, ?)", (source_id, target_id)
+            ).fetchone()[0]
+            if count < 2:
+                return False
             for s_id, t_id in [(source_id, target_id), (target_id, source_id)]:
-                row = db.execute(
-                    "SELECT weight FROM coactivation WHERE source_id = ? AND target_id = ?",
-                    (s_id, t_id),
-                ).fetchone()
-                current = float(row["weight"]) if row else 0.0
-                new_weight = max(0.0, min(1.0, current + delta))
                 db.execute(
                     """INSERT INTO coactivation (source_id, target_id, weight)
                        VALUES (?, ?, ?)
-                       ON CONFLICT(source_id, target_id) DO UPDATE SET weight = excluded.weight""",
-                    (s_id, t_id, new_weight),
+                       ON CONFLICT(source_id, target_id)
+                       DO UPDATE SET weight = MIN(1.0, coactivation.weight + excluded.weight)""",
+                    (s_id, t_id, delta),
                 )
             db.commit()
+            return True
 
-        await asyncio.to_thread(_bump)
-        return True
+        return await asyncio.to_thread(_bump)
+
+    async def decay_coactivation(self, factor: float = 0.95) -> int:
+        """Multiply all coactivation weights by factor; prune near-zero entries."""
+        db = self._ensure_connected()
+
+        def _decay() -> int:
+            db.execute("UPDATE coactivation SET weight = weight * ?", (factor,))
+            result = db.execute("DELETE FROM coactivation WHERE weight < 0.01")
+            db.commit()
+            return result.rowcount
+
+        return await asyncio.to_thread(_decay)
 
     # ── maybe_add_related_link ──────────────────
 
@@ -843,20 +969,129 @@ class MemoryStore:
         threshold: float = 0.6,
     ) -> bool:
         db = self._ensure_connected()
-        row = await asyncio.to_thread(
-            db.execute,
-            "SELECT weight FROM coactivation WHERE source_id = ? AND target_id = ?",
-            (source_id, target_id),
-        )
-        r = row.fetchone()
-        if r is None or float(r["weight"]) < threshold:
+
+        def _check() -> float | None:
+            row = db.execute(
+                "SELECT weight FROM coactivation WHERE source_id = ? AND target_id = ?",
+                (source_id, target_id),
+            ).fetchone()
+            return float(row["weight"]) if row else None
+
+        weight = await asyncio.to_thread(_check)
+        if weight is None or weight < threshold:
             return False
-        await self.add_causal_link(
+        await self.add_link(
             source_id=source_id,
             target_id=target_id,
             link_type="related",
             note="auto-linked by consolidation replay",
         )
+        return True
+
+    # ── delete ──────────────────────────────────
+
+    async def delete(self, memory_id: str) -> bool:
+        """Delete a memory and clean up all references."""
+        db = self._ensure_connected()
+
+        def _delete() -> bool:
+            # Check existence
+            row = db.execute("SELECT id, linked_ids, episode_id FROM memories WHERE id = ?", (memory_id,)).fetchone()
+            if row is None:
+                return False
+
+            # Clean up legacy linked_ids CSV on related memories
+            linked_ids_str = row["linked_ids"] or ""
+            if linked_ids_str:
+                linked = [lid.strip() for lid in linked_ids_str.split(",") if lid.strip()]
+                for lid in linked:
+                    other = db.execute("SELECT id, linked_ids FROM memories WHERE id = ?", (lid,)).fetchone()
+                    if other:
+                        other_links = [x.strip() for x in (other["linked_ids"] or "").split(",") if x.strip()]
+                        other_links = [x for x in other_links if x != memory_id]
+                        db.execute(
+                            "UPDATE memories SET linked_ids = ? WHERE id = ?",
+                            (",".join(other_links), lid),
+                        )
+            # memory_links rows cascade via ON DELETE CASCADE (foreign key)
+
+            # Remove from episode memory_ids
+            episode_id = row["episode_id"]
+            if episode_id:
+                ep_row = db.execute("SELECT id, memory_ids FROM episodes WHERE id = ?", (episode_id,)).fetchone()
+                if ep_row:
+                    ep_mids = [m.strip() for m in (ep_row["memory_ids"] or "").split(",") if m.strip()]
+                    ep_mids = [m for m in ep_mids if m != memory_id]
+                    db.execute(
+                        "UPDATE episodes SET memory_ids = ? WHERE id = ?",
+                        (",".join(ep_mids), episode_id),
+                    )
+
+            # Delete memory (embeddings + coactivation cascade)
+            db.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+            db.commit()
+            return True
+
+        result = await asyncio.to_thread(_delete)
+        if result:
+            self._bm25_index.mark_dirty()
+            self._working_memory.remove(memory_id)
+        return result
+
+    # ── update ──────────────────────────────────
+
+    async def update(
+        self,
+        memory_id: str,
+        content: str | None = None,
+        emotion: str | None = None,
+        importance: int | None = None,
+        category: str | None = None,
+    ) -> bool:
+        """Update a memory's user-facing fields. Re-embeds if content changes."""
+        db = self._ensure_connected()
+
+        existing = await self.get_by_id(memory_id)
+        if existing is None:
+            return False
+
+        fields: dict[str, Any] = {}
+        if emotion is not None:
+            fields["emotion"] = emotion
+        if importance is not None:
+            fields["importance"] = max(1, min(5, importance))
+        if category is not None:
+            fields["category"] = category
+
+        new_embedding: list[float] | None = None
+
+        if content is not None and content != existing.content:
+            normalized = normalize_japanese(content)
+            reading = get_reading(content)
+            new_embedding = await self._encode_document(normalized)
+            fields["content"] = content
+            fields["normalized_content"] = normalized
+            fields["reading"] = reading
+
+        if not fields:
+            return True
+
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values()) + [memory_id]
+
+        def _update() -> None:
+            db.execute(f"UPDATE memories SET {set_clause} WHERE id = ?", values)
+            if new_embedding is not None:
+                vector_blob = encode_vector(new_embedding)
+                db.execute(
+                    "INSERT OR REPLACE INTO embeddings (memory_id, vector) VALUES (?,?)",
+                    (memory_id, vector_blob),
+                )
+            db.commit()
+
+        await asyncio.to_thread(_update)
+        if content is not None:
+            self._bm25_index.mark_dirty()
         return True
 
     # ── save_with_auto_link ─────────────────────
@@ -944,31 +1179,153 @@ class MemoryStore:
 
         await asyncio.to_thread(_link)
 
+    # ── memory_links table operations ───────────
+
+    async def add_link(
+        self,
+        source_id: str,
+        target_id: str,
+        link_type: str = "similar",
+        note: str | None = None,
+        bidirectional: bool = False,
+    ) -> None:
+        """Add a link to the memory_links table."""
+        db = self._ensure_connected()
+        now = datetime.now().isoformat()
+
+        def _insert() -> None:
+            db.execute(
+                """INSERT OR IGNORE INTO memory_links
+                   (source_id, target_id, link_type, note, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (source_id, target_id, link_type, note, now),
+            )
+            if bidirectional:
+                db.execute(
+                    """INSERT OR IGNORE INTO memory_links
+                       (source_id, target_id, link_type, note, created_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (target_id, source_id, link_type, note, now),
+                )
+            db.commit()
+
+        await asyncio.to_thread(_insert)
+
+    async def remove_link(
+        self,
+        source_id: str,
+        target_id: str,
+        link_type: str | None = None,
+    ) -> bool:
+        """Remove link(s) between two memories. Returns True if any removed."""
+        db = self._ensure_connected()
+
+        def _delete() -> int:
+            if link_type is not None:
+                r = db.execute(
+                    "DELETE FROM memory_links WHERE source_id=? AND target_id=? AND link_type=?",
+                    (source_id, target_id, link_type),
+                )
+            else:
+                r = db.execute(
+                    "DELETE FROM memory_links WHERE source_id=? AND target_id=?",
+                    (source_id, target_id),
+                )
+            db.commit()
+            return r.rowcount
+
+        return await asyncio.to_thread(_delete) > 0
+
+    async def get_links_from(
+        self,
+        memory_id: str,
+        link_type: str | None = None,
+    ) -> list[dict]:
+        """Get all outgoing links from a memory."""
+        db = self._ensure_connected()
+
+        def _fetch() -> list[dict]:
+            if link_type is not None:
+                rows = db.execute(
+                    "SELECT * FROM memory_links WHERE source_id=? AND link_type=? ORDER BY created_at",
+                    (memory_id, link_type),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT * FROM memory_links WHERE source_id=? ORDER BY created_at",
+                    (memory_id,),
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        return await asyncio.to_thread(_fetch)
+
+    async def get_links_to(
+        self,
+        memory_id: str,
+        link_type: str | None = None,
+    ) -> list[dict]:
+        """Get all incoming links to a memory (reverse query)."""
+        db = self._ensure_connected()
+
+        def _fetch() -> list[dict]:
+            if link_type is not None:
+                rows = db.execute(
+                    "SELECT * FROM memory_links WHERE target_id=? AND link_type=? ORDER BY created_at",
+                    (memory_id, link_type),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT * FROM memory_links WHERE target_id=? ORDER BY created_at",
+                    (memory_id,),
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        return await asyncio.to_thread(_fetch)
+
+    async def _get_links_batch(self, memory_ids: list[str]) -> list[dict]:
+        """Fetch all links where any of memory_ids is source OR target (one query)."""
+        if not memory_ids:
+            return []
+        db = self._ensure_connected()
+        placeholders = ",".join("?" * len(memory_ids))
+
+        def _fetch() -> list[dict]:
+            rows = db.execute(
+                f"""SELECT * FROM memory_links
+                    WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})""",
+                memory_ids + memory_ids,
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+        return await asyncio.to_thread(_fetch)
+
     # ── get_linked_memories ─────────────────────
 
     async def get_linked_memories(self, memory_id: str, depth: int = 1) -> list[Memory]:
+        """BFS over memory_links table (all link types, bidirectional)."""
         depth = max(1, min(5, depth))
-        visited: set[str] = set()
+        visited: set[str] = {memory_id}
         result: list[Memory] = []
         current_ids = [memory_id]
 
         for _ in range(depth):
-            next_ids: list[str] = []
-            for mem_id in current_ids:
-                if mem_id in visited:
-                    continue
-                visited.add(mem_id)
-                memory = await self.get_by_id(mem_id)
-                if memory is None:
-                    continue
-                if mem_id != memory_id:
-                    result.append(memory)
-                for linked_id in memory.linked_ids:
-                    if linked_id not in visited:
-                        next_ids.append(linked_id)
-            current_ids = next_ids
             if not current_ids:
                 break
+            # Batch fetch links for current level
+            links = await self._get_links_batch(current_ids)
+            next_ids: list[str] = []
+            for link in links:
+                # traverse both directions (bidirectional)
+                for tid in (link["target_id"], link["source_id"]):
+                    if tid not in visited and tid != memory_id:
+                        visited.add(tid)
+                        next_ids.append(tid)
+            if next_ids:
+                fetched = await asyncio.to_thread(
+                    self._fetch_memories_by_ids_sync, self._ensure_connected(), next_ids
+                )
+                result.extend(fetched)
+            current_ids = next_ids
 
         return result
 
@@ -982,14 +1339,16 @@ class MemoryStore:
     ) -> list[MemorySearchResult]:
         main_results = await self.recall(context=context, n_results=n_results)
         seen_ids: set[str] = {r.memory.id for r in main_results}
-        linked_memories: list[Memory] = []
+        linked_results: list[MemorySearchResult] = []
         for result in main_results:
             linked = await self.get_linked_memories(memory_id=result.memory.id, depth=chain_depth)
             for mem in linked:
                 if mem.id not in seen_ids:
                     seen_ids.add(mem.id)
-                    linked_memories.append(mem)
-        linked_results = [MemorySearchResult(memory=mem, distance=999.0) for mem in linked_memories]
+                    # Use parent distance + small penalty instead of sentinel 999.0
+                    linked_results.append(
+                        MemorySearchResult(memory=mem, distance=result.distance + 0.1)
+                    )
         return main_results + linked_results
 
     # ── add_causal_link ─────────────────────────
@@ -1001,26 +1360,34 @@ class MemoryStore:
         link_type: str = "caused_by",
         note: str | None = None,
     ) -> None:
-        source_memory = await self.get_by_id(source_id)
-        if source_memory is None:
+        """Add a structured causal/related link via the memory_links table."""
+        # Validate both exist
+        db = self._ensure_connected()
+
+        def _exists(mid: str) -> bool:
+            return db.execute("SELECT 1 FROM memories WHERE id = ?", (mid,)).fetchone() is not None
+
+        if not await asyncio.to_thread(_exists, source_id):
             raise ValueError(f"Source memory not found: {source_id}")
-        target_memory = await self.get_by_id(target_id)
-        if target_memory is None:
+        if not await asyncio.to_thread(_exists, target_id):
             raise ValueError(f"Target memory not found: {target_id}")
 
-        new_link = MemoryLink(
-            target_id=target_id,
-            link_type=link_type,
-            created_at=datetime.now().isoformat(),
-            note=note,
-        )
-        existing_links = list(source_memory.links)
-        for link in existing_links:
-            if link.target_id == target_id and link.link_type == link_type:
-                return
-        updated_links = tuple(existing_links + [new_link])
-        links_json = json.dumps([link.to_dict() for link in updated_links])
-        await self.update_memory_fields(source_id, links=links_json)
+        # Also write to legacy JSON column for backward compatibility
+        source_memory = await self.get_by_id(source_id)
+        if source_memory is not None:
+            new_link = MemoryLink(
+                target_id=target_id,
+                link_type=link_type,
+                created_at=datetime.now().isoformat(),
+                note=note,
+            )
+            existing_links = list(source_memory.links)
+            if not any(lk.target_id == target_id and lk.link_type == link_type for lk in existing_links):
+                updated_links = tuple(existing_links + [new_link])
+                links_json = json.dumps([lk.to_dict() for lk in updated_links])
+                await self.update_memory_fields(source_id, links=links_json)
+
+        await self.add_link(source_id, target_id, link_type, note)
 
     # ── get_causal_chain ────────────────────────
 
@@ -1030,36 +1397,50 @@ class MemoryStore:
         direction: str = "backward",
         max_depth: int = 5,
     ) -> list[tuple[Memory, str]]:
+        """Follow causal links via memory_links table (batch queries, no N+1)."""
         max_depth = max(1, min(5, max_depth))
         if direction == "backward":
-            target_link_types = {"caused_by"}
+            target_link_types = ("caused_by",)
         elif direction == "forward":
-            target_link_types = {"leads_to"}
+            target_link_types = ("leads_to",)
         else:
             raise ValueError(f"Invalid direction: {direction}")
 
-        visited: set[str] = set()
+        db = self._ensure_connected()
+        placeholders = ",".join("?" * len(target_link_types))
+
+        visited: set[str] = {memory_id}
         result: list[tuple[Memory, str]] = []
         current_ids = [memory_id]
 
         for _ in range(max_depth):
-            next_ids: list[str] = []
-            for mem_id in current_ids:
-                if mem_id in visited:
-                    continue
-                visited.add(mem_id)
-                memory = await self.get_by_id(mem_id)
-                if memory is None:
-                    continue
-                for link in memory.links:
-                    if link.link_type in target_link_types:
-                        target = await self.get_by_id(link.target_id)
-                        if target and link.target_id not in visited:
-                            result.append((target, link.link_type))
-                            next_ids.append(link.target_id)
-            current_ids = next_ids
             if not current_ids:
                 break
+            src_ph = ",".join("?" * len(current_ids))
+
+            def _fetch_links(cur_ids: list[str] = current_ids) -> list[dict]:
+                rows = db.execute(
+                    f"""SELECT source_id, target_id, link_type FROM memory_links
+                        WHERE source_id IN ({src_ph}) AND link_type IN ({placeholders})""",
+                    cur_ids + list(target_link_types),
+                ).fetchall()
+                return [dict(row) for row in rows]
+
+            links = await asyncio.to_thread(_fetch_links)
+            next_ids = [lk["target_id"] for lk in links if lk["target_id"] not in visited]
+            visited.update(next_ids)
+
+            if next_ids:
+                fetched = await asyncio.to_thread(
+                    self._fetch_memories_by_ids_sync, db, next_ids
+                )
+                mem_map = {m.id: m for m in fetched}
+                for link in links:
+                    tid = link["target_id"]
+                    if tid in mem_map:
+                        result.append((mem_map[tid], link["link_type"]))
+
+            current_ids = next_ids
 
         return result
 
@@ -1096,6 +1477,36 @@ class MemoryStore:
 
         return await asyncio.to_thread(_fetch)
 
+    # ── get_memories_by_camera_position ─────────
+
+    async def get_memories_by_camera_position(
+        self,
+        pan_angle: float,
+        tilt_angle: float,
+        tolerance: float = 15.0,
+    ) -> list[Memory]:
+        """Return memories captured near the given camera angle (SQL-indexed)."""
+        db = self._ensure_connected()
+
+        def _fetch() -> list[Memory]:
+            rows = db.execute(
+                """SELECT * FROM memories
+                   WHERE pan_angle BETWEEN ? AND ?
+                     AND tilt_angle BETWEEN ? AND ?
+                   ORDER BY timestamp DESC""",
+                (
+                    pan_angle - tolerance, pan_angle + tolerance,
+                    tilt_angle - tolerance, tilt_angle + tolerance,
+                ),
+            ).fetchall()
+            memories: list[Memory] = []
+            for row in rows:
+                coactivation = self._get_coactivation(db, row["id"])
+                memories.append(_row_to_memory(row, coactivation))
+            return memories
+
+        return await asyncio.to_thread(_fetch)
+
     # ── get_working_memory ──────────────────────
 
     def get_working_memory(self) -> WorkingMemoryBuffer:
@@ -1104,7 +1515,7 @@ class MemoryStore:
     # ── Episode CRUD ────────────────────────────
 
     async def save_episode(self, episode: Episode) -> None:
-        """Persist an Episode to the episodes table."""
+        """Persist an Episode to the episodes table and save its embedding."""
         db = self._ensure_connected()
 
         def _insert() -> None:
@@ -1130,6 +1541,21 @@ class MemoryStore:
 
         await asyncio.to_thread(_insert)
 
+        # Save embedding for semantic search
+        embed_text = f"{episode.title} {episode.summary}".strip()
+        if embed_text:
+            embedding = await self._encode_document(embed_text)
+            vector_blob = encode_vector(embedding)
+
+            def _insert_embedding() -> None:
+                db.execute(
+                    "INSERT OR REPLACE INTO episode_embeddings (episode_id, vector) VALUES (?,?)",
+                    (episode.id, vector_blob),
+                )
+                db.commit()
+
+            await asyncio.to_thread(_insert_embedding)
+
     async def get_episode_by_id(self, episode_id: str) -> Episode | None:
         db = self._ensure_connected()
 
@@ -1142,11 +1568,46 @@ class MemoryStore:
         return await asyncio.to_thread(_fetch)
 
     async def search_episodes(self, query: str, n_results: int = 5) -> list[Episode]:
-        """Search episodes by title/summary (LIKE search, good enough for few episodes)."""
+        """Search episodes by semantic similarity, with LIKE fallback."""
         db = self._ensure_connected()
+
+        # Try semantic search first
+        def _fetch_with_embeddings() -> list[tuple[str, bytes]]:
+            rows = db.execute(
+                "SELECT ee.episode_id, ee.vector FROM episode_embeddings ee"
+            ).fetchall()
+            return [(row["episode_id"], row["vector"]) for row in rows]
+
+        ep_vectors = await asyncio.to_thread(_fetch_with_embeddings)
+
+        if ep_vectors:
+            query_emb = await self._encode_query(normalize_japanese(query))
+            query_vec = np.array(query_emb, dtype=np.float32)
+
+            ep_ids = [ep_id for ep_id, _ in ep_vectors]
+            vecs = np.stack([decode_vector(blob) for _, blob in ep_vectors])
+            scores = cosine_similarity(query_vec, vecs)  # shape (n,), higher = more similar
+            order = np.argsort(scores)[::-1]  # descending
+
+            top_ids = [ep_ids[i] for i in order[:n_results]]
+
+            def _fetch_by_ids() -> list[Episode]:
+                if not top_ids:
+                    return []
+                placeholders = ",".join("?" * len(top_ids))
+                rows = db.execute(
+                    f"SELECT * FROM episodes WHERE id IN ({placeholders})",
+                    top_ids,
+                ).fetchall()
+                id_to_ep = {_row_to_episode(row).id: _row_to_episode(row) for row in rows}
+                return [id_to_ep[eid] for eid in top_ids if eid in id_to_ep]
+
+            return await asyncio.to_thread(_fetch_by_ids)
+
+        # Fallback: LIKE search
         pattern = f"%{query}%"
 
-        def _fetch() -> list[Episode]:
+        def _fetch_like() -> list[Episode]:
             rows = db.execute(
                 """SELECT * FROM episodes
                    WHERE title LIKE ? OR summary LIKE ?
@@ -1155,7 +1616,7 @@ class MemoryStore:
             ).fetchall()
             return [_row_to_episode(row) for row in rows]
 
-        return await asyncio.to_thread(_fetch)
+        return await asyncio.to_thread(_fetch_like)
 
     async def list_all_episodes(self) -> list[Episode]:
         db = self._ensure_connected()
